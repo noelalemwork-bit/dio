@@ -329,9 +329,29 @@ namespace Dio.UI
 
         void OnRaceStartedLocally(bool _, RaceStartMessage __)
         {
-            if (menuRoot != null) menuRoot.SetActive(false);
             if (hudRoot != null) hudRoot.SetActive(true);
-            // No fallback that hides the whole canvas — we WANT the HUD visible.
+
+            if (menuRoot != null)
+            {
+                menuRoot.SetActive(false);
+                return;
+            }
+
+            // Defensive path — menuRoot wasn't wired (old scene from before the
+            // menuRoot/hudRoot split). Walk the canvas and hide every sibling
+            // EXCEPT the HUD root. We must NOT hide the canvas itself, because
+            // the HUD lives on it.
+            var canvas = hudRoot != null
+                ? hudRoot.GetComponentInParent<Canvas>()
+                : GetComponentInParent<Canvas>();
+            if (canvas == null) return;
+
+            for (int i = 0; i < canvas.transform.childCount; i++)
+            {
+                var child = canvas.transform.GetChild(i).gameObject;
+                if (hudRoot != null && child == hudRoot) continue;
+                child.SetActive(false);
+            }
         }
 
         static void ClearChildren(Transform root, List<GameObject> tracked)

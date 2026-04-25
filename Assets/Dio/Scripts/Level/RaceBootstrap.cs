@@ -15,6 +15,10 @@ namespace Dio.Level
         /// uses this for lookup so we don't depend on an unregistered "Planet" tag.
         public static GameObject CurrentPlanet { get; private set; }
 
+        /// The active LevelData for the running race. Used by the HUD's position
+        /// tracker (closest-to-finish proxy until M2 lands the real arc-length tracker).
+        public static LevelData CurrentLevel { get; private set; }
+
         [Tooltip("Default level used if no race-start message has been received yet.")]
         public LevelData defaultLevel;
 
@@ -71,6 +75,7 @@ namespace Dio.Level
                 return;
             }
 
+            CurrentLevel = level;
             EnsurePlanet(level.planetRadius);
             EnsureTrackLine(level);
         }

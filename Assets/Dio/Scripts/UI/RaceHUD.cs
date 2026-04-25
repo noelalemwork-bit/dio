@@ -40,6 +40,11 @@ namespace Dio.UI
         [Tooltip("Speed (post-multiplier kph) at which the needle hits the right end of the dial.")]
         public float speedMaxKphDisplay = 360f;
 
+        [Header("Position tracker")]
+        public TMP_Text positionLabel;
+        public int positionTopN = 4;
+        public float positionUpdateInterval = 0.4f;
+
         Dictionary<PowerupKind, Sprite> _iconMap;
         DioCar _localCar;
         PowerupHolder _localHolder;
@@ -47,6 +52,10 @@ namespace Dio.UI
 
         PowerupKind _lastHeld = PowerupKind.None;
         int _lastCharges = -1;
+
+        float _nextPositionUpdate;
+        readonly System.Text.StringBuilder _positionSb = new System.Text.StringBuilder(128);
+        readonly List<(string name, float dist, bool isMe)> _scratchEntries = new List<(string, float, bool)>(8);
 
         void Awake()
         {
@@ -65,6 +74,58 @@ namespace Dio.UI
             if (_localCar == null) FindLocalCar();
             if (_localHolder != null) RefreshPowerupSlot();
             if (_localController != null) RefreshSpeed();
+            RefreshPositions();
+        }
+
+        // Closest-to-finish proxy for race position. Replaced by a real
+        // arc-length-along-track tracker once procedural track meshes land (M2).
+        void RefreshPositions()
+        {
+            if (positionLabel == null) return;
+            if (Time.unscaledTime < _nextPositionUpdate) return;
+            _nextPositionUpdate = Time.unscaledTime + positionUpdateInterval;
+
+            var level = Dio.Level.RaceBootstrap.CurrentLevel;
+            if (level == null || !level.HasMinimum) return;
+
+            Vector3 finishWorld = level.Finish.directionFromCenter.normalized * level.planetRadius;
+            var planet = Dio.Level.RaceBootstrap.CurrentPlanet;
+            if (planet != null) finishWorld += planet.transform.position;
+
+            _scratchEntries.Clear();
+            foreach (var ni in NetworkClient.spawned.Values)
+            {
+                var car = ni != null ? ni.GetComponent<DioCar>() : null;
+                if (car == null) continue;
+                float dist = (car.transform.position - finishWorld).magnitude;
+                string name = string.IsNullOrEmpty(car.ownerName) ? "Player" : car.ownerName;
+                _scratchEntries.Add((name, dist, car.isOwned));
+            }
+            _scratchEntries.Sort((a, b) => a.dist.CompareTo(b.dist));
+
+            _positionSb.Clear();
+            int max = Mathf.Min(_scratchEntries.Count, positionTopN);
+            for (int i = 0; i < max; i++)
+            {
+                var (name, _, isMe) = _scratchEntries[i];
+                if (i > 0) _positionSb.Append('\n');
+                _positionSb.Append(Ordinal(i + 1));
+                _positionSb.Append("  ");
+                _positionSb.Append(name);
+                if (isMe) _positionSb.Append("  (you)");
+            }
+            positionLabel.text = _positionSb.ToString();
+        }
+
+        static string Ordinal(int n)
+        {
+            switch (n)
+            {
+                case 1: return "1st";
+                case 2: return "2nd";
+                case 3: return "3rd";
+                default: return n + "th";
+            }
         }
 
         void RefreshSpeed()

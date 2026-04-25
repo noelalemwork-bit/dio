@@ -547,6 +547,38 @@ namespace Dio.UI.EditorTools
             speedText.alignment = TextAlignmentOptions.MidlineRight;
             speedText.font = TMP_Settings.defaultFontAsset;
 
+            // Position tracker (top-right). Compact panel with a header + list.
+            var posPanel = AddPanel(hudRoot.transform, "PositionPanel", new Color(0f, 0f, 0f, 0.4f));
+            var posRt = (RectTransform)posPanel.transform;
+            posRt.anchorMin = new Vector2(1, 1); posRt.anchorMax = new Vector2(1, 1);
+            posRt.pivot = new Vector2(1, 1);
+            posRt.anchoredPosition = new Vector2(-24, -24);
+            posRt.sizeDelta = new Vector2(280, 180);
+
+            var posVG = posPanel.AddComponent<VerticalLayoutGroup>();
+            posVG.padding = new RectOffset(14, 14, 10, 10);
+            posVG.spacing = 4;
+            posVG.childAlignment = TextAnchor.UpperLeft;
+            posVG.childControlWidth = true; posVG.childForceExpandWidth = true;
+            posVG.childControlHeight = false;
+
+            var posHeader = AddText(posPanel.transform, "Header", "POSITION", 18, FontStyles.Bold);
+            posHeader.color = new Color(1f, 0.85f, 0.55f, 1f);
+            posHeader.alignment = TextAlignmentOptions.MidlineLeft;
+
+            var posListGo = new GameObject("List", typeof(RectTransform));
+            posListGo.transform.SetParent(posPanel.transform, false);
+            var posListLE = posListGo.AddComponent<LayoutElement>();
+            posListLE.flexibleHeight = 1;
+            var posList = posListGo.AddComponent<TextMeshProUGUI>();
+            posList.text = "—";
+            posList.fontSize = 22;
+            posList.fontStyle = FontStyles.Bold;
+            posList.color = Color.white;
+            posList.alignment = TextAlignmentOptions.TopLeft;
+            posList.font = TMP_Settings.defaultFontAsset;
+            posList.lineSpacing = 4f;
+
             // RaceHUD component, wired with all the HUD refs + powerup icon map.
             var hudCtrl = hudRoot.AddComponent<RaceHUD>();
             hudCtrl.minimapRoot = minimapRt;
@@ -555,6 +587,7 @@ namespace Dio.UI.EditorTools
             hudCtrl.powerupChargeLabel = chargeLabel;
             hudCtrl.speedLabel = speedText;
             hudCtrl.speedNeedle = needleRt;
+            hudCtrl.positionLabel = posList;
             hudCtrl.iconEntries = BuildPowerupIconMap();
 
             // ---- Wire MainMenuController on a top-level controller GO ----
