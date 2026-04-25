@@ -27,6 +27,9 @@ namespace Dio.UI.EditorTools
         const string LevelsDir = DioRoot + "/Levels";
         const string DefaultLevelPath = LevelsDir + "/DefaultLevel.asset";
         const string SvgDir = DioRoot + "/UI/Svg";
+        const string ShadersDir = DioRoot + "/Shaders";
+        const string SkyboxMaterialPath = ShadersDir + "/SunsetSky.mat";
+        const string SkyboxShaderPath = ShadersDir + "/SunsetSky.shader";
 
         [MenuItem("Tools/Dio/Build/Re-import SVGs")]
         public static int ReimportSvgs()
@@ -48,6 +51,53 @@ namespace Dio.UI.EditorTools
         {
             var path = $"{SvgDir}/{svgName}.svg";
             return AssetDatabase.LoadAssetAtPath<Sprite>(path);
+        }
+
+        [MenuItem("Tools/Dio/Build/Sunset Sky Material")]
+        public static Material BuildSkyboxMaterial()
+        {
+            EnsureDir(ShadersDir);
+            var shader = AssetDatabase.LoadAssetAtPath<Shader>(SkyboxShaderPath);
+            if (shader == null)
+            {
+                Debug.LogError($"[Dio] Sky shader not found at {SkyboxShaderPath}");
+                return null;
+            }
+
+            var mat = AssetDatabase.LoadAssetAtPath<Material>(SkyboxMaterialPath);
+            if (mat == null)
+            {
+                mat = new Material(shader);
+                AssetDatabase.CreateAsset(mat, SkyboxMaterialPath);
+            }
+            else
+            {
+                mat.shader = shader;
+            }
+
+            // Cartoony sunset palette: deep orange horizon, red-orange mid, magenta zenith.
+            mat.SetColor("_ColorBottom", new Color(1.00f, 0.55f, 0.20f, 1f));
+            mat.SetColor("_ColorMid",    new Color(0.95f, 0.32f, 0.30f, 1f));
+            mat.SetColor("_ColorTop",    new Color(0.30f, 0.12f, 0.45f, 1f));
+            mat.SetFloat("_MidPoint", 0.45f);
+
+            // Sun: low + slightly off-axis, warm cream.
+            mat.SetVector("_SunDir", new Vector4(-0.30f, 0.18f, 1.00f, 0f).normalized);
+            mat.SetColor("_SunColor", new Color(1.00f, 0.92f, 0.70f, 1f));
+            mat.SetFloat("_SunSize", 0.04f);
+            mat.SetFloat("_SunHaloPower", 24f);
+
+            // Soft puffy clouds, drifting slowly.
+            mat.SetColor("_CloudColor",  new Color(1.00f, 0.78f, 0.58f, 1f));
+            mat.SetColor("_CloudShadow", new Color(0.58f, 0.22f, 0.30f, 1f));
+            mat.SetFloat("_CloudCoverage", 0.55f);
+            mat.SetFloat("_CloudScale", 4f);
+            mat.SetFloat("_CloudSpeed", 0.04f);
+            mat.SetFloat("_CloudDensity", 0.85f);
+
+            EditorUtility.SetDirty(mat);
+            AssetDatabase.SaveAssets();
+            return mat;
         }
 
         [MenuItem("Tools/Dio/Build/All (Player + NetMgr + Car + Powerups + Level + Main Scene)", priority = 0)]
@@ -155,12 +205,37 @@ namespace Dio.UI.EditorTools
             var camGo = new GameObject("Main Camera", typeof(Camera), typeof(AudioListener));
             camGo.tag = "MainCamera";
             var cam = camGo.GetComponent<Camera>();
-            cam.clearFlags = CameraClearFlags.SolidColor;
+            cam.clearFlags = CameraClearFlags.Skybox;
             cam.backgroundColor = new Color(0.94f, 0.92f, 0.86f, 1f);
             cam.orthographic = false;
 
             new GameObject("EventSystem", typeof(UnityEngine.EventSystems.EventSystem),
                 typeof(UnityEngine.EventSystems.StandaloneInputModule));
+
+            // Warm directional sun light, low on the horizon to match the sunset skybox.
+            var sunGo = new GameObject("Sun Light", typeof(Light));
+            var sun = sunGo.GetComponent<Light>();
+            sun.type = LightType.Directional;
+            sun.color = new Color(1.00f, 0.82f, 0.58f);
+            sun.intensity = 1.15f;
+            sun.shadows = LightShadows.Soft;
+            sunGo.transform.rotation = Quaternion.Euler(12f, 30f, 0f);
+
+            // Sunset skybox.
+            var skyMat = BuildSkyboxMaterial();
+            if (skyMat != null)
+            {
+                RenderSettings.skybox = skyMat;
+                RenderSettings.ambientMode = UnityEngine.Rendering.AmbientMode.Trilight;
+                RenderSettings.ambientSkyColor    = new Color(0.55f, 0.30f, 0.45f);
+                RenderSettings.ambientEquatorColor = new Color(0.95f, 0.55f, 0.40f);
+                RenderSettings.ambientGroundColor  = new Color(0.30f, 0.18f, 0.20f);
+                RenderSettings.fog = true;
+                RenderSettings.fogMode = FogMode.ExponentialSquared;
+                RenderSettings.fogColor = new Color(1.00f, 0.55f, 0.40f);
+                RenderSettings.fogDensity = 0.0025f;
+                DynamicGI.UpdateEnvironment();
+            }
 
             // Network manager instance from prefab.
             var netInstance = (GameObject)PrefabUtility.InstantiatePrefab(netMgrPrefab);
@@ -444,6 +519,20 @@ namespace Dio.UI.EditorTools
             gaugeRt.sizeDelta = new Vector2(96, 96);
             SvgIconLoader.AttachIcon(gaugeGo, LoadSvg("hud_speed"), Color.white);
 
+            // Speedometer needle: a thin rectangle pivoted at the gauge's "center pin"
+            // (the dot at SVG coords (32, 50) inside a 64×64 viewBox = 28% from the bottom of the rect).
+            var needleGo = new GameObject("Needle", typeof(RectTransform), typeof(Image));
+            needleGo.transform.SetParent(gaugeGo.transform, false);
+            var needleRt = (RectTransform)needleGo.transform;
+            needleRt.anchorMin = new Vector2(0.5f, 0.28f);
+            needleRt.anchorMax = new Vector2(0.5f, 0.28f);
+            needleRt.pivot = new Vector2(0.5f, 0f); // bottom of the rectangle = the pin
+            needleRt.sizeDelta = new Vector2(4, 36);
+            needleRt.anchoredPosition = Vector2.zero;
+            var needleImg = needleGo.GetComponent<Image>();
+            needleImg.color = new Color(0.88f, 0.32f, 0.24f, 1f);
+            needleImg.raycastTarget = false;
+
             var speedTextGo = new GameObject("Readout", typeof(RectTransform));
             speedTextGo.transform.SetParent(speedGo.transform, false);
             var speedTextRt = (RectTransform)speedTextGo.transform;
@@ -465,6 +554,7 @@ namespace Dio.UI.EditorTools
             hudCtrl.powerupSlotIcon = slotIconImg;
             hudCtrl.powerupChargeLabel = chargeLabel;
             hudCtrl.speedLabel = speedText;
+            hudCtrl.speedNeedle = needleRt;
             hudCtrl.iconEntries = BuildPowerupIconMap();
 
             // ---- Wire MainMenuController on a top-level controller GO ----

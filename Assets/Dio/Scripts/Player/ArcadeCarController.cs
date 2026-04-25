@@ -46,11 +46,14 @@ namespace Dio.Player
         public Axle rearAxle  = new Axle { steers = false, drives = true,  brakes = true };
 
         [Header("Drive")]
-        [Tooltip("Peak motor torque at zero speed (Nm). Falls off linearly to maxSpeed.")]
-        public float peakMotorTorque = 1500f;
-        public float maxSpeed = 35f;             // m/s ~ 126 kph
-        public float brakeTorque = 3000f;
-        public float handbrakeTorque = 5000f;
+        [Tooltip("Peak motor torque at zero speed (Nm). Falls off with speed via a sqrt curve for arcade punch.")]
+        public float peakMotorTorque = 2800f;
+        public float maxSpeed = 45f;             // m/s ~ 162 kph
+        public float brakeTorque = 3500f;
+        public float handbrakeTorque = 5500f;
+        [Tooltip("Extra torque multiplier while below launchSpeedFraction × maxSpeed (off-the-line punch).")]
+        public float launchBoost = 1.4f;
+        [Range(0f, 1f)] public float launchSpeedFraction = 0.35f;
 
         [Header("Steering")]
         public float maxSteerAngle = 32f;
@@ -172,8 +175,12 @@ namespace Dio.Player
             ApplySteer(rearAxle, 0f);
 
             float forwardThrottle = Mathf.Clamp(move.y, -1f, 1f);
-            float speedFalloff = Mathf.Clamp01(1f - SpeedMps / Mathf.Max(0.001f, maxSpeed));
-            float drive = forwardThrottle * peakMotorTorque * speedFalloff;
+            // Sqrt falloff keeps power high through most of the range and tapers near the top.
+            float speedRatio = Mathf.Clamp01(SpeedMps / Mathf.Max(0.001f, maxSpeed));
+            float speedFalloff = 1f - Mathf.Sqrt(speedRatio);
+            // Off-the-line launch boost.
+            float launch = speedRatio < launchSpeedFraction ? launchBoost : 1f;
+            float drive = forwardThrottle * peakMotorTorque * speedFalloff * launch;
             float brakeAmt = brake ? brakeTorque : 0f;
             float hbAmt = handbrake ? handbrakeTorque : 0f;
 

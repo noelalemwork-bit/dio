@@ -33,6 +33,12 @@ namespace Dio.UI
 
         [Header("Speed")]
         public TMP_Text speedLabel;
+        [Tooltip("Pivot at the bottom-center; 0° = 12 o'clock, +120° = 7 o'clock (idle), -120° = 5 o'clock (max).")]
+        public RectTransform speedNeedle;
+        [Tooltip("kph displayed = real m/s × 3.6 × this. Arcade-y inflation; tune for feel.")]
+        public float speedDisplayMultiplier = 3.0f;
+        [Tooltip("Speed (post-multiplier kph) at which the needle hits the right end of the dial.")]
+        public float speedMaxKphDisplay = 360f;
 
         Dictionary<PowerupKind, Sprite> _iconMap;
         DioCar _localCar;
@@ -58,8 +64,23 @@ namespace Dio.UI
         {
             if (_localCar == null) FindLocalCar();
             if (_localHolder != null) RefreshPowerupSlot();
-            if (_localController != null && speedLabel != null)
-                speedLabel.text = $"{_localController.SpeedMps * 3.6f:0} km/h";
+            if (_localController != null) RefreshSpeed();
+        }
+
+        void RefreshSpeed()
+        {
+            float kph = _localController.SpeedMps * 3.6f * speedDisplayMultiplier;
+            if (speedLabel != null) speedLabel.text = $"{kph:0} km/h";
+
+            if (speedNeedle != null)
+            {
+                // Map [0..maxKph] -> [+120°..-120°] (lower-left to lower-right via 12 o'clock).
+                float t = Mathf.Clamp01(kph / Mathf.Max(1f, speedMaxKphDisplay));
+                float angle = Mathf.Lerp(120f, -120f, t);
+                var euler = speedNeedle.localEulerAngles;
+                euler.z = angle;
+                speedNeedle.localEulerAngles = euler;
+            }
         }
 
         void FindLocalCar()
