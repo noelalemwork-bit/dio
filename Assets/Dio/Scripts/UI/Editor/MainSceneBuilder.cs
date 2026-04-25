@@ -221,6 +221,10 @@ namespace Dio.UI.EditorTools
             sun.shadows = LightShadows.Soft;
             sunGo.transform.rotation = Quaternion.Euler(12f, 30f, 0f);
 
+            // Runtime binder that keeps the skybox's _PlayerUp aligned with the
+            // local player's surface normal as they drive around the planet.
+            sunGo.AddComponent<Dio.Common.SkyboxPlayerUpBinder>();
+
             // Sunset skybox.
             var skyMat = BuildSkyboxMaterial();
             if (skyMat != null)
