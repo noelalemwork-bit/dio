@@ -101,3 +101,10 @@ Assets/Dio/Scenes/Main.unity.meta
 .vsconfig
 Assets/_Recovery/
 Assets/_Recovery.meta
+
+# Local package metadata
+Packages/manifest.json
+Packages/packages-lock.json
+
+# Local Unity metadata
+*.meta
