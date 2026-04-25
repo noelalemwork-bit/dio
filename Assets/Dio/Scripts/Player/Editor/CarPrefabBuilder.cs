@@ -94,6 +94,20 @@ namespace Dio.Player.EditorTools
             root.AddComponent<Dio.Powerups.States.CarStateMachine>();
             root.AddComponent<Dio.Powerups.PowerupHolder>();
 
+            // -- Boost trail (visual fx) --
+            // Two short streamers behind the rear wheels; emitting is toggled
+            // by CarBoostTrail when SpeedBoost / Star state is active.
+            var trailLeft  = BuildBoostTrail(root.transform, "BoostTrailL", new Vector3(-0.6f, 0.2f, -1.5f));
+            var trailRight = BuildBoostTrail(root.transform, "BoostTrailR", new Vector3( 0.6f, 0.2f, -1.5f));
+            var boostTrail = root.AddComponent<CarBoostTrail>();
+            boostTrail.trail = trailLeft;
+            // Pair the second renderer up via a child component too — using a
+            // flat array of TrailRenderers would be cleaner but a single ref
+            // keeps the inspector small. The right-side trail toggles via its
+            // own CarBoostTrail (cheap, no extra logic).
+            var rightSync = trailRight.gameObject.AddComponent<CarBoostTrail>();
+            rightSync.trail = trailRight;
+
             // -- Save prefab --
             if (File.Exists(CarPrefabPath)) AssetDatabase.DeleteAsset(CarPrefabPath);
             var prefab = PrefabUtility.SaveAsPrefabAsset(root, CarPrefabPath);
@@ -106,6 +120,47 @@ namespace Dio.Player.EditorTools
         // ---------- helpers ----------
 
         struct WheelRig { public WheelCollider collider; public Transform visual; }
+
+        // Tail flame trail — color shifts orange → yellow → transparent. Runs
+        // through a `Sprites/Default` material because URP's Lit doesn't
+        // support TrailRenderer's vertex-color path; using the bundled
+        // unlit Sprites shader is the standard "particle/trail" choice.
+        static TrailRenderer BuildBoostTrail(Transform parent, string name, Vector3 localPos)
+        {
+            var go = new GameObject(name);
+            go.transform.SetParent(parent, false);
+            go.transform.localPosition = localPos;
+            var t = go.AddComponent<TrailRenderer>();
+            t.time = 0.45f;
+            t.startWidth = 0.55f;
+            t.endWidth = 0.05f;
+            t.minVertexDistance = 0.12f;
+            t.emitting = false;
+            t.shadowCastingMode = UnityEngine.Rendering.ShadowCastingMode.Off;
+            t.receiveShadows = false;
+            // Color gradient: hot orange-red → fading yellow.
+            var grad = new Gradient();
+            grad.SetKeys(
+                new[] {
+                    new GradientColorKey(new Color(1f, 0.55f, 0.10f), 0f),
+                    new GradientColorKey(new Color(1f, 0.92f, 0.35f), 0.55f),
+                    new GradientColorKey(new Color(1f, 0.30f, 0.10f), 1f),
+                },
+                new[] { new GradientAlphaKey(0.95f, 0f), new GradientAlphaKey(0.65f, 0.5f), new GradientAlphaKey(0f, 1f) }
+            );
+            t.colorGradient = grad;
+            // Material — try URP particles first, fall back to legacy.
+            var sh = Shader.Find("Universal Render Pipeline/Particles/Unlit")
+                  ?? Shader.Find("Sprites/Default")
+                  ?? Shader.Find("Particles/Standard Unlit");
+            if (sh != null)
+            {
+                var mat = new Material(sh) { name = "BoostTrail" };
+                if (mat.HasProperty("_BaseColor")) mat.SetColor("_BaseColor", Color.white);
+                t.material = mat;
+            }
+            return t;
+        }
 
         static void BuildPart(Transform parent, string name, Mesh mesh, Vector3 offset, Vector3 scale, Material material, bool addCollider)
         {
@@ -150,6 +205,7 @@ namespace Dio.Player.EditorTools
             if (r != null) r.sharedMaterial = material;
         }
 
+#if UNITY_6000_0_OR_NEWER
         static PhysicsMaterial _cachedBumperMat;
         static PhysicsMaterial GetOrCreateBumperMaterial()
         {
@@ -170,6 +226,28 @@ namespace Dio.Player.EditorTools
             _cachedBumperMat = pm;
             return pm;
         }
+#else
+        static PhysicMaterial _cachedBumperMat;
+        static PhysicMaterial GetOrCreateBumperMaterial()
+        {
+            if (_cachedBumperMat != null) return _cachedBumperMat;
+            EnsureDir(MaterialsDir);
+            string path = MaterialsDir + "/CarBumper.physicMaterial";
+            var existing = AssetDatabase.LoadAssetAtPath<PhysicMaterial>(path);
+            if (existing != null) { _cachedBumperMat = existing; return existing; }
+            var pm = new PhysicMaterial("CarBumper")
+            {
+                bounciness = 0.55f,
+                dynamicFriction = 0.05f,
+                staticFriction = 0.05f,
+                bounceCombine = PhysicMaterialCombine.Maximum,
+                frictionCombine = PhysicMaterialCombine.Minimum,
+            };
+            AssetDatabase.CreateAsset(pm, path);
+            _cachedBumperMat = pm;
+            return pm;
+        }
+#endif
 
         static WheelRig BuildWheel(Transform parent, VehicleProfile p, Vector3 chassisXZ, string name, Material wheelMat)
         {

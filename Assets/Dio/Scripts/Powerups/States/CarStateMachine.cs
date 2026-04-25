@@ -6,13 +6,23 @@ using Dio.Player;
 namespace Dio.Powerups.States
 {
     /// Per-car state machine. Lives on the same GameObject as DioCar.
-    /// Server simulates; clients receive a SyncList of currently-active state
-    /// kinds for visual indicators (glow, shrunk-scale, etc.).
+    ///
+    /// Server authority on the *timeline*: the server creates/removes states
+    /// and ticks their durations. The active set is broadcast as a SyncList of
+    /// PowerupKind ints so every peer knows what's currently on each car.
+    ///
+    /// Owner-side application: with client-authority physics (DioCar refactor),
+    /// the OWNER is the only peer running the controller — so the owner must
+    /// apply ModifyController + ModifyInputs locally. The factory rebuilds
+    /// short-lived "client copy" CarState instances from the synced kinds; we
+    /// don't sync per-state internals (Slip seed, Star elapsed, etc.) — the
+    /// effects are stable enough across peers without that fidelity.
     [RequireComponent(typeof(DioCar))]
     [DefaultExecutionOrder(-50)] // after DioCar (-100), before ArcadeCarController (0)
     public class CarStateMachine : NetworkBehaviour
     {
-        readonly List<CarState> _states = new List<CarState>();
+        readonly List<CarState> _serverStates = new List<CarState>();
+        readonly List<CarState> _clientStates = new List<CarState>(); // owner mirror
         readonly SyncList<int> _activeKinds = new SyncList<int>();
 
         DioCar _car;
@@ -23,15 +33,23 @@ namespace Dio.Powerups.States
         float _basePeakTorque;
         Vector3 _baseScale;
 
-        public IReadOnlyList<CarState> Active => _states;
+        public IReadOnlyList<CarState> Active => _serverStates;
+        public IReadOnlyList<int> ActiveKinds => _activeKinds;
 
         public bool IsInvincible
         {
             get
             {
-                foreach (var s in _states) if (s.Kind == PowerupKind.Star) return true;
+                foreach (var s in _serverStates) if (s.Kind == PowerupKind.Star) return true;
+                foreach (var k in _activeKinds) if ((PowerupKind)k == PowerupKind.Star) return true;
                 return false;
             }
+        }
+
+        public bool IsActive(PowerupKind kind)
+        {
+            foreach (var k in _activeKinds) if ((PowerupKind)k == kind) return true;
+            return false;
         }
 
         void Awake()
@@ -43,8 +61,19 @@ namespace Dio.Powerups.States
             _baseScale = transform.localScale;
         }
 
-        public override void OnStartClient() => _activeKinds.OnChange += OnKindsChanged;
-        public override void OnStopClient() => _activeKinds.OnChange -= OnKindsChanged;
+        public override void OnStartClient()
+        {
+            _activeKinds.OnChange += OnKindsChanged;
+            // Catch up on any kinds already in the list at spawn time.
+            RebuildClientStates();
+            ApplyVisualState();
+        }
+
+        public override void OnStopClient()
+        {
+            _activeKinds.OnChange -= OnKindsChanged;
+            _clientStates.Clear();
+        }
 
         [Server]
         public void Apply(CarState state)
@@ -52,54 +81,85 @@ namespace Dio.Powerups.States
             if (state == null) return;
             state.Car = _car;
             state.OnEnter();
-            _states.Add(state);
+            _serverStates.Add(state);
             _activeKinds.Add((int)state.Kind);
         }
 
         [Server]
         public void Clear(PowerupKind kind)
         {
-            for (int i = _states.Count - 1; i >= 0; i--)
-                if (_states[i].Kind == kind) RemoveAt(i);
+            for (int i = _serverStates.Count - 1; i >= 0; i--)
+                if (_serverStates[i].Kind == kind) RemoveAt(i);
         }
 
         void RemoveAt(int i)
         {
-            var s = _states[i];
+            var s = _serverStates[i];
             s.OnExit();
-            _states.RemoveAt(i);
+            _serverStates.RemoveAt(i);
 
             // Remove first matching kind from sync list.
             int idx = _activeKinds.IndexOf((int)s.Kind);
             if (idx >= 0) _activeKinds.RemoveAt(idx);
         }
 
+        // Called by DioCar.FixedUpdate on the owner. The server has the
+        // authoritative copy; the owner uses its local mirror to keep the
+        // input-modify pass working when the server isn't simulating.
         public void ModifyInputs(ref ArcadeCarController.Inputs inputs)
         {
-            for (int i = 0; i < _states.Count; i++) _states[i].ModifyInputs(ref inputs);
+            // Use server's instances if available; otherwise the client mirror.
+            var src = _serverStates.Count > 0 ? _serverStates : _clientStates;
+            for (int i = 0; i < src.Count; i++) src[i].ModifyInputs(ref inputs);
         }
 
         void FixedUpdate()
         {
-            if (!isServer) return;
-
-            // Reset controller knobs to baseline before per-state mutations.
-            _controller.maxSpeed = _baseMaxSpeed;
-            _controller.peakMotorTorque = _basePeakTorque;
-
-            for (int i = _states.Count - 1; i >= 0; i--)
+            // Server: tick durations + remove expired (drives the SyncList).
+            if (isServer)
             {
-                var s = _states[i];
-                s.OnTick(Time.fixedDeltaTime);
-                if (s.IsExpired) { RemoveAt(i); continue; }
-                s.ModifyController(_controller);
+                for (int i = _serverStates.Count - 1; i >= 0; i--)
+                {
+                    var s = _serverStates[i];
+                    s.OnTick(Time.fixedDeltaTime);
+                    if (s.IsExpired) { RemoveAt(i); continue; }
+                }
+            }
+
+            // Owner: apply ModifyController to its local controller every tick.
+            // (Server, when it's not the host, has a kinematic controller that
+            // doesn't simulate, so writes are wasted there.) Reset baseline
+            // first so multiple boosts compose deterministically and old
+            // boosts don't leave the controller permanently bumped.
+            if (_car != null && _car.isOwned)
+            {
+                _controller.maxSpeed = _baseMaxSpeed;
+                _controller.peakMotorTorque = _basePeakTorque;
+
+                // Prefer server's authoritative state instances when we are
+                // host; fall back to the client mirror otherwise.
+                var src = isServer ? _serverStates : _clientStates;
+                for (int i = 0; i < src.Count; i++) src[i].ModifyController(_controller);
             }
         }
 
-        // Visual sync — client-side scale change for Shrunk, etc.
+        // SyncList callback. Rebuild the client mirror + refresh visuals.
         void OnKindsChanged(SyncList<int>.Operation op, int idx, int item)
         {
+            RebuildClientStates();
             ApplyVisualState();
+        }
+
+        void RebuildClientStates()
+        {
+            // Cheap rebuild — at most ~3 active states per car. Avoids the
+            // headache of incremental add/remove tracking against SyncList ops.
+            _clientStates.Clear();
+            foreach (var k in _activeKinds)
+            {
+                var s = CarStateFactory.Create((PowerupKind)k);
+                if (s != null) { s.Car = _car; _clientStates.Add(s); }
+            }
         }
 
         void ApplyVisualState()

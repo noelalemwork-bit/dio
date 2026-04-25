@@ -35,6 +35,12 @@ namespace Dio.Powerups
             var holder = car.GetComponent<PowerupHolder>();
             if (holder == null) return;
 
+            // One powerup per slot at a time. The player has to use or wait
+            // out the existing held kind before grabbing another. The slot
+            // auto-clears after `DefaultHoldSeconds(kind)` so this never
+            // permanently locks the player out.
+            if (holder.HasHeld) return;
+
             // Group constraint: a single mid-track row hands out one powerup per car.
             if (groupId != 0 && holder.HasConsumedGroup(groupId)) return;
 

@@ -51,14 +51,26 @@ namespace Dio.Powerups.Effects
 
         public override void Activate(DioCar caster)
         {
+            // Collect target world positions FIRST so we can broadcast a
+            // single Rpc with the full list (cheaper than one Rpc per target).
+            var targets = new System.Collections.Generic.List<Vector3>();
             foreach (var ni in NetworkServer.spawned.Values)
             {
                 var car = ni.GetComponent<DioCar>();
                 if (car == null || car == caster) continue;
                 var sm = car.GetComponent<CarStateMachine>();
                 if (sm != null && !sm.IsInvincible)
+                {
                     sm.Apply(new ShrunkState { Duration = Duration });
+                    targets.Add(car.transform.position);
+                }
             }
+
+            // Show the visual zap on every peer, including solo-test (empty
+            // target list draws a single forward bolt as fallback feedback).
+            var holder = caster.GetComponent<PowerupHolder>();
+            if (holder != null)
+                holder.RpcShowLightning(caster.transform.position, targets.ToArray());
         }
     }
 
@@ -120,9 +132,10 @@ namespace Dio.Powerups.Effects
         public override void Activate(DioCar owner) => Spawn(owner, PowerupRegistry.GetPrefab(Kind));
     }
 
-    public class BobombEffect : SpawnPrefabForwardEffect
+    public class BobombEffect : SpawnPrefabBehindEffect
     {
         public override PowerupKind Kind => PowerupKind.Bobomb;
+        public BobombEffect() { backOffset = 3f; }
         public override void Activate(DioCar owner) => Spawn(owner, PowerupRegistry.GetPrefab(Kind));
     }
 
@@ -131,19 +144,28 @@ namespace Dio.Powerups.Effects
     public class TornadoEffect : PowerupEffect
     {
         public override PowerupKind Kind => PowerupKind.Tornado;
+        [Tooltip("How far ahead of the caster the tornado is spat.")]
+        public float forwardOffset = 14f;
+
         public override void Activate(DioCar owner)
         {
             var prefab = PowerupRegistry.GetPrefab(Kind);
             if (prefab == null) { Debug.LogWarning($"[Dio] Tornado has no prefab."); return; }
-            // Place 30 m ahead on the surface, deterministic basis.
-            Vector3 pos = owner.transform.position + owner.transform.forward * 30f;
+            // Spawn ahead of the caster on the planet surface. TornadoObstacle
+            // re-snaps to the surface in OnStartServer so we don't have to be
+            // exact about the radial component here.
+            Vector3 pos = owner.transform.position + owner.transform.forward * forwardOffset;
             var go = Object.Instantiate(prefab, pos, owner.transform.rotation);
             var t = go.GetComponent<TornadoObstacle>();
             if (t != null)
             {
-                t.circleCenterDir = pos.normalized;
                 var planetGo = Dio.Level.RaceBootstrap.CurrentPlanet;
-                if (planetGo != null) t.planet = planetGo.transform;
+                if (planetGo != null)
+                {
+                    t.planet = planetGo.transform;
+                    var lvl = Dio.Level.RaceBootstrap.CurrentLevel;
+                    if (lvl != null) t.planetRadius = lvl.planetRadius;
+                }
             }
             var ob = go.GetComponent<Obstacle>();
             if (ob != null) ob.ownerConnectionId = owner.connectionToClient != null ? owner.connectionToClient.connectionId : -1;

@@ -168,32 +168,64 @@ namespace Dio.Powerups.EditorTools
 
         static GameObject BuildBanana()
         {
-            var go = NewSphere("Banana", new Color(0.95f, 0.85f, 0.25f, 1f), 0.6f, true);
+            // Bigger + brighter so it reads on the track. Body sphere is the
+            // visible peel; trigger collider is sized to match the visible
+            // mesh (radius 1.0 = local diameter 1, scaled by transform.scale).
+            var go = NewSphere("Banana", new Color(1.00f, 0.92f, 0.20f, 1f), 1.0f, true);
+            // Bump the trigger's *radius* to match the visual: a low-poly
+            // sphere primitive has mesh radius 0.5, transform scale = 2 (from
+            // NewSphere) → world radius 1.0. SphereCollider radius 0.5 ×
+            // transform scale 2 = world radius 1.0. Already matches.
             go.AddComponent<NetworkIdentity>();
             Dio.Net.EditorTools.NetworkTransformConfigurer.Configure(go, fastCar:false);
             go.AddComponent<BananaObstacle>();
-            AddLabel(go.transform, "Banana", 1.0f);
+            AddLabel(go.transform, "Banana", 1.4f);
             return SaveAndDestroy(go, "Banana");
         }
 
         static GameObject BuildOilSlick()
         {
+            // Bigger + glossy. The visual is a flat-ish disc, but the trigger
+            // collider is intentionally TALL (localspace y=20 × scale 0.15 =
+            // 3 m world height) so it catches the car's body collider at
+            // y=0.25-0.95. Without this the slick visually overlapped the
+            // car but the trigger was too thin to fire.
             var go = GameObject.CreatePrimitive(PrimitiveType.Cylinder);
             go.name = "OilSlick";
-            go.transform.localScale = new Vector3(4f, 0.05f, 4f);
+            go.transform.localScale = new Vector3(5f, 0.15f, 5f);
             var r = go.GetComponent<Renderer>();
-            if (r != null) r.sharedMaterial = GetOrCreateColoredMat("PU_OilSlick", new Color(0.06f, 0.06f, 0.08f, 1f));
+            if (r != null)
+            {
+                // Slightly purple-black, glossy. URP/Lit handles smoothness via _Smoothness.
+                Shader sh = Shader.Find("Universal Render Pipeline/Lit") ?? Shader.Find("Standard");
+                EnsureDir(MaterialsDir);
+                string path = MaterialsDir + "/PU_OilSlick.mat";
+                var mat = AssetDatabase.LoadAssetAtPath<Material>(path);
+                if (mat == null)
+                {
+                    mat = new Material(sh) { name = "PU_OilSlick" };
+                    AssetDatabase.CreateAsset(mat, path);
+                }
+                mat.shader = sh;
+                if (mat.HasProperty("_BaseColor")) mat.SetColor("_BaseColor", new Color(0.04f, 0.03f, 0.06f));
+                else mat.color = new Color(0.04f, 0.03f, 0.06f);
+                if (mat.HasProperty("_Smoothness")) mat.SetFloat("_Smoothness", 0.92f);
+                if (mat.HasProperty("_Metallic")) mat.SetFloat("_Metallic", 0.0f);
+                EditorUtility.SetDirty(mat);
+                r.sharedMaterial = mat;
+            }
             var col = go.GetComponent<CapsuleCollider>();
-            // Replace capsule with a flat box trigger.
             Object.DestroyImmediate(col);
             var box = go.AddComponent<BoxCollider>();
             box.isTrigger = true;
-            box.size = new Vector3(2f, 0.5f, 2f);
+            // Trigger volume tall enough to catch the car body even though
+            // the visual disc is paper-thin.
+            box.size = new Vector3(2f, 20f, 2f);
             go.AddComponent<NetworkIdentity>();
             Dio.Net.EditorTools.NetworkTransformConfigurer.Configure(go, fastCar:false);
             var ob = go.AddComponent<OilSlickObstacle>();
             ob.lifetime = 8f;
-            AddLabel(go.transform, "Oil", 1.5f);
+            AddLabel(go.transform, "OIL", 2.0f);
             return SaveAndDestroy(go, "OilSlick");
         }
 
@@ -229,34 +261,46 @@ namespace Dio.Powerups.EditorTools
 
         static GameObject BuildBobomb()
         {
-            var go = NewSphere("Bobomb", new Color(0.15f, 0.15f, 0.18f, 1f), 0.5f, false);
+            // Bigger + trigger collider. With server-side cars kinematic,
+            // the bomb has to use trigger overlap to detect impacts (two
+            // kinematic bodies don't fire OnCollisionEnter).
+            var go = NewSphere("Bobomb", new Color(0.10f, 0.10f, 0.12f, 1f), 0.9f, true);
             var rb = go.AddComponent<Rigidbody>();
             rb.useGravity = false;
+            rb.isKinematic = true;
             rb.mass = 8f;
             go.AddComponent<NetworkIdentity>();
             Dio.Net.EditorTools.NetworkTransformConfigurer.Configure(go, fastCar:false);
             go.AddComponent<BobombObstacle>();
-            AddLabel(go.transform, "Bomb", 1.0f);
+            AddLabel(go.transform, "BOOM", 1.4f);
             return SaveAndDestroy(go, "Bobomb");
         }
 
         static GameObject BuildTornado()
         {
-            var go = GameObject.CreatePrimitive(PrimitiveType.Cylinder);
-            go.name = "Tornado";
-            go.transform.localScale = new Vector3(4f, 6f, 4f);
-            var r = go.GetComponent<Renderer>();
-            if (r != null) r.sharedMaterial = GetOrCreateColoredMat("PU_Tornado", new Color(0.7f, 0.85f, 0.95f, 0.6f));
-            var col = go.GetComponent<CapsuleCollider>();
-            // Convert to trigger.
+            // Empty root — TornadoObstacle generates the funnel mesh at runtime
+            // (procedural cylinder with wavy radius + vertex-colour gradient).
+            // The prefab carries only NetworkIdentity, NetworkTransform, the
+            // trigger collider that catches passing cars, and the obstacle
+            // script with its tunables. Visuals are spawned per-peer.
+            var go = new GameObject("Tornado");
+            // Trigger volume — capsule centered on the funnel midline. Sized
+            // a bit wider than the funnel maxRadius so the hitbox grazes
+            // cars driving past, not just driving through dead-center.
+            var col = go.AddComponent<CapsuleCollider>();
             col.isTrigger = true;
+            col.height = 2f;
+            col.radius = 0.7f;
+            col.center = new Vector3(0f, 1f, 0f);
+            col.direction = 1; // Y axis
             go.AddComponent<NetworkIdentity>();
             Dio.Net.EditorTools.NetworkTransformConfigurer.Configure(go, fastCar:false);
             var t = go.AddComponent<TornadoObstacle>();
             t.lifetime = 10f;
-            t.orbitRadius = 30f;
-            t.angularSpeed = 0.5f;
-            AddLabel(go.transform, "Tornado", 7f);
+            t.spinDegPerSec = 540f;
+            t.forwardSpeed = 16f;
+            t.height = 2f;
+            t.maxRadius = 0.4f;
             return SaveAndDestroy(go, "Tornado");
         }
 

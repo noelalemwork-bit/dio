@@ -16,7 +16,7 @@ namespace Dio.UI
     /// Lives on the RaceHUD root so it has access to the countdown TMP text.
     /// All clients subscribe to `DioNetworkManager.OnRaceStarted`; the
     /// `startServerTime` field on the race-start message is the shared GO!
-    /// instant that every peer ticks toward via `NetworkTime.time`.
+    /// instanupt that every peer ticks toward via `NetworkTime.time`.
     public class RaceIntro : MonoBehaviour
     {
         [Header("Countdown text")]
