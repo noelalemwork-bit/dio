@@ -1,7 +1,7 @@
 using System.Collections.Generic;
 using Mirror;
 using UnityEngine;
-using UnityEngine.SceneManagement;
+using Dio.Player;
 
 namespace Dio.Net
 {
@@ -18,8 +18,12 @@ namespace Dio.Net
         [Tooltip("Allow the host to start a race even with 0 connected clients (development only).")]
         public bool soloBypass = true;
 
-        [Tooltip("Scene to load when the race starts. Leave empty to stay in the current scene (additive spawn).")]
-        public string raceSceneName = "Race";
+        [Header("Race")]
+        [Tooltip("Networked car prefab. Spawned per-connection on race start.")]
+        public GameObject carPrefab;
+
+        [Tooltip("Default level to load when the race starts. RaceBootstrap reads this on clients too.")]
+        public Dio.Level.LevelData defaultLevel;
 
         public DioNetworkDiscovery discovery;
 
@@ -30,12 +34,46 @@ namespace Dio.Net
 
         public static DioNetworkManager Instance => singleton as DioNetworkManager;
 
-        public static System.Action<bool> OnRaceStarted; // bool isServer
+        // Bool argument: true if this peer is the server (host or dedicated).
+        public static System.Action<bool, RaceStartMessage> OnRaceStarted;
 
         public override void Awake()
         {
             base.Awake();
             if (discovery == null) discovery = GetComponent<DioNetworkDiscovery>();
+        }
+
+        public override void OnStartServer()
+        {
+            base.OnStartServer();
+
+            // Register all networked spawnable prefabs (powerup boxes, obstacles).
+            var bootstrap = FindAnyObjectByType<Dio.Powerups.PowerupBootstrap>();
+            if (bootstrap != null)
+            {
+                foreach (var go in bootstrap.AllNetworkedPrefabs)
+                {
+                    if (go != null && !NetworkClient.prefabs.ContainsValue(go))
+                        NetworkClient.RegisterPrefab(go);
+                }
+            }
+        }
+
+        public override void OnStartClient()
+        {
+            base.OnStartClient();
+            NetworkClient.ReplaceHandler<RaceStartMessage>(OnClientRaceStart);
+
+            // Same registration on the client so it can spawn obstacles/powerups.
+            var bootstrap = FindAnyObjectByType<Dio.Powerups.PowerupBootstrap>();
+            if (bootstrap != null)
+            {
+                foreach (var go in bootstrap.AllNetworkedPrefabs)
+                {
+                    if (go != null && !NetworkClient.prefabs.ContainsValue(go))
+                        NetworkClient.RegisterPrefab(go);
+                }
+            }
         }
 
         public override void OnServerAddPlayer(NetworkConnectionToClient conn)
@@ -46,13 +84,14 @@ namespace Dio.Net
                 var p = conn.identity.GetComponent<DioPlayer>();
                 if (p != null) _players[conn.connectionId] = p;
             }
-            DioPlayer.OnRosterChanged?.Invoke(); // best-effort; hooks also fire from SyncVars.
+            DioPlayer.OnRosterChanged?.Invoke();
         }
 
         public override void OnServerDisconnect(NetworkConnectionToClient conn)
         {
             _players.Remove(conn.connectionId);
             base.OnServerDisconnect(conn);
+            DioPlayer.OnRosterChanged?.Invoke();
         }
 
         // ---------- Race start ----------
@@ -64,6 +103,7 @@ namespace Dio.Net
             return _players.Count >= minPlayers;
         }
 
+        [Server]
         public void ServerStartRace()
         {
             if (!CanStartRace())
@@ -71,34 +111,84 @@ namespace Dio.Net
                 Debug.Log($"[Dio] ServerStartRace denied. players={_players.Count} min={minPlayers} soloBypass={soloBypass}");
                 return;
             }
+
             var msg = new RaceStartMessage
             {
-                levelGuid = string.Empty, // wired up later by track loader
+                levelGuid = string.Empty,
                 seed = Random.Range(int.MinValue, int.MaxValue),
                 startServerTime = NetworkTime.time + 1.0,
             };
+
+            // Server-side spawning of cars. Client-side bootstrap (planet, camera)
+            // is triggered via OnRaceStarted, which fires from the message handler.
+            ServerSpawnCarsForAllPlayers();
+
+            // Tell every client (host's local client included).
             NetworkServer.SendToAll(msg);
-            HandleRaceStartLocal(msg, isServer: true);
+
+            // Headless dedicated server: the message handler won't fire on the
+            // server-only path, so notify ourselves once. In host mode the
+            // local NetworkClient receives the message and fires the handler;
+            // we don't manually call OnRaceStarted to avoid double-firing.
+            if (!NetworkClient.active)
+                OnRaceStarted?.Invoke(true, msg);
         }
 
-        public override void OnStartServer()
+        [Server]
+        void ServerSpawnCarsForAllPlayers()
         {
-            base.OnStartServer();
-            NetworkServer.RegisterHandler<RaceStartMessage>(_ => { /* server ignores its own broadcast */ });
+            if (carPrefab == null) { Debug.LogError("[Dio] carPrefab is null on DioNetworkManager."); return; }
+            if (defaultLevel == null || !defaultLevel.HasMinimum)
+            {
+                Debug.LogError("[Dio] defaultLevel missing or has fewer than 2 points.");
+                return;
+            }
+
+            int i = 0;
+            foreach (var kv in _players)
+            {
+                var conn = NetworkServer.connections.TryGetValue(kv.Key, out var c) ? c : null;
+                var player = kv.Value;
+                Vector3 pos; Quaternion rot;
+                ComputeStartTransform(defaultLevel, i, out pos, out rot);
+
+                var carGo = Instantiate(carPrefab, pos, rot);
+                NetworkServer.Spawn(carGo, conn);
+
+                var car = carGo.GetComponent<DioCar>();
+                if (car != null && player != null) car.ServerInitialize(player);
+                i++;
+            }
+
+            // Solo-bypass: spawn the host a car even if no DioPlayer exists yet (e.g.
+            // testing without the lobby).
+            if (_players.Count == 0 && soloBypass)
+            {
+                ComputeStartTransform(defaultLevel, 0, out var pos, out var rot);
+                var carGo = Instantiate(carPrefab, pos, rot);
+                NetworkServer.Spawn(carGo);
+            }
         }
 
-        public override void OnStartClient()
+        static void ComputeStartTransform(Dio.Level.LevelData level, int slot, out Vector3 pos, out Quaternion rot)
         {
-            base.OnStartClient();
-            NetworkClient.RegisterHandler<RaceStartMessage>(msg => HandleRaceStartLocal(msg, isServer: false));
+            Vector3 startDir = level.points[0].directionFromCenter.normalized;
+            Vector3 nextDir  = level.points[1].directionFromCenter.normalized;
+
+            // Stagger slots ~2 m to the side along the start tangent.
+            Vector3 tangent = Dio.Level.GeodesicUtil.TangentAt(startDir, nextDir);
+            Vector3 right = Vector3.Cross(startDir, tangent).normalized;
+            float lateral = (slot % 2 == 0 ? -1f : 1f) * (2f * (slot / 2 + 1));
+
+            pos = startDir * level.planetRadius + startDir * 1.5f + right * lateral;
+            rot = Quaternion.LookRotation(tangent, startDir);
         }
 
-        void HandleRaceStartLocal(RaceStartMessage msg, bool isServer)
+        void OnClientRaceStart(RaceStartMessage msg)
         {
-            Debug.Log($"[Dio] RaceStart received. server={isServer} startTime={msg.startServerTime} seed={msg.seed}");
-
-            // For now we don't switch scenes; the race scene is built/spawned in-place by RaceBootstrap.
-            OnRaceStarted?.Invoke(isServer);
+            // Fires on every client, including the host's local client.
+            // isServer-side already received this as part of its own send.
+            OnRaceStarted?.Invoke(NetworkServer.active, msg);
         }
 
         // ---------- Discovery convenience ----------

@@ -3,14 +3,32 @@ using UnityEngine.InputSystem;
 
 namespace Dio.Player
 {
-    /// Arcade-flavoured WheelCollider car. Tuned for stability + punchy launch:
-    /// - High lateral stiffness so we don't spin out.
-    /// - Steer angle scales down with speed.
-    /// - Counter-spin damping around local up.
-    /// - Air control torques when wheels are off the ground.
+    /// Arcade-flavoured WheelCollider car.
+    ///
+    /// Input model:
+    ///   * `readLocalInput == true`: reads the Input System (or keyboard
+    ///      fallback) every FixedUpdate and updates `currentInputs`. Use this
+    ///      for solo testing or non-networked builds.
+    ///   * `readLocalInput == false`: an external system (e.g. `DioCar`)
+    ///      writes to `currentInputs` and we just apply it. Use this in the
+    ///      networked path where the server runs the simulation.
+    ///
+    /// Tuned for stability + punchy launch:
+    ///   - High lateral stiffness so we don't spin out.
+    ///   - Steer angle scales down with speed.
+    ///   - Counter-spin damping around local up.
+    ///   - Air control torques when wheels are off the ground.
     [RequireComponent(typeof(Rigidbody))]
     public class ArcadeCarController : MonoBehaviour
     {
+        [System.Serializable]
+        public struct Inputs
+        {
+            public Vector2 steerThrottle; // x = steer (-1..1), y = throttle (-1..1)
+            public bool brake;
+            public bool handbrake;
+        }
+
         [System.Serializable]
         public class Axle
         {
@@ -41,18 +59,23 @@ namespace Dio.Player
         public float steerSmooth = 8f;
 
         [Header("Arcade tuning")]
-        [Tooltip("Damp angular velocity around local up when it grows large compared to forward speed.")]
         public float counterSpinDamping = 4f;
         public float airPitchTorque = 8f;
         public float airYawTorque = 12f;
 
-        [Header("Input (assignable; otherwise falls back to keyboard)")]
+        [Header("Input")]
+        [Tooltip("If true, this component reads inputs itself each FixedUpdate. " +
+                 "Set false when an external system (e.g. DioCar) drives currentInputs over the network.")]
+        public bool readLocalInput = true;
+
         public InputActionReference moveAction;
         public InputActionReference brakeAction;
         public InputActionReference handbrakeAction;
         public InputActionReference cameraCycleAction;
 
-        // public read-out for camera + UI
+        public Inputs currentInputs;
+
+        // Read-out for camera + UI.
         public float SpeedMps { get; private set; }
         public bool AnyWheelGrounded { get; private set; }
         public System.Action OnCameraCycleRequested;
@@ -66,8 +89,6 @@ namespace Dio.Player
         {
             _rb = GetComponent<Rigidbody>();
             _gravity = GetComponent<SphericalGravity>();
-
-            // Lower the centre of mass so we don't tip over on hard turns.
             _rb.centerOfMass = new Vector3(0f, -0.4f, 0f);
 
             if (moveAction != null) moveAction.action.Enable();
@@ -94,12 +115,21 @@ namespace Dio.Player
                 OnCameraCycleRequested?.Invoke();
         }
 
+        public Inputs ReadLocalInputsNow()
+        {
+            return new Inputs
+            {
+                steerThrottle = ReadMove(),
+                brake = ReadBrake(),
+                handbrake = ReadHandbrake(),
+            };
+        }
+
         Vector2 ReadMove()
         {
             if (moveAction != null && moveAction.action.enabled)
                 return moveAction.action.ReadValue<Vector2>();
 
-            // Keyboard fallback.
             var kb = Keyboard.current;
             if (kb == null) return Vector2.zero;
             float x = (kb.aKey.isPressed || kb.leftArrowKey.isPressed ? -1f : 0f)
@@ -125,14 +155,15 @@ namespace Dio.Player
 
         void FixedUpdate()
         {
-            Vector2 move = ReadMove();
-            bool brake = ReadBrake();
-            bool handbrake = ReadHandbrake();
+            if (readLocalInput) currentInputs = ReadLocalInputsNow();
+
+            Vector2 move = currentInputs.steerThrottle;
+            bool brake = currentInputs.brake;
+            bool handbrake = currentInputs.handbrake;
 
             SpeedMps = _rb.linearVelocity.magnitude;
             AnyWheelGrounded = WheelGrounded(frontAxle) || WheelGrounded(rearAxle);
 
-            // Steering with speed-based scaling.
             float steerScale = steerHalfSpeed / Mathf.Max(steerHalfSpeed, SpeedMps + steerHalfSpeed * 0.5f);
             float targetSteer = move.x * maxSteerAngle * steerScale;
             _currentSteer = Mathf.Lerp(_currentSteer, targetSteer, steerSmooth * Time.fixedDeltaTime);
@@ -140,7 +171,6 @@ namespace Dio.Player
             ApplySteer(frontAxle, _currentSteer);
             ApplySteer(rearAxle, 0f);
 
-            // Drive / brake.
             float forwardThrottle = Mathf.Clamp(move.y, -1f, 1f);
             float speedFalloff = Mathf.Clamp01(1f - SpeedMps / Mathf.Max(0.001f, maxSpeed));
             float drive = forwardThrottle * peakMotorTorque * speedFalloff;
@@ -153,24 +183,21 @@ namespace Dio.Player
             UpdateVisuals(frontAxle);
             UpdateVisuals(rearAxle);
 
-            // Counter-spin: damp angular velocity around local up if it's getting silly.
             Vector3 up = _gravity != null ? _gravity.PlanetUp : transform.up;
             Vector3 angVel = _rb.angularVelocity;
             float yaw = Vector3.Dot(angVel, up);
-            float yawCap = Mathf.Max(1.5f, SpeedMps * 0.15f); // rad/s
+            float yawCap = Mathf.Max(1.5f, SpeedMps * 0.15f);
             if (Mathf.Abs(yaw) > yawCap)
             {
                 float excess = yaw - Mathf.Sign(yaw) * yawCap;
                 _rb.AddTorque(-up * excess * counterSpinDamping, ForceMode.Acceleration);
             }
 
-            // Air control.
             if (!AnyWheelGrounded)
             {
                 Vector3 right = transform.right;
-                Vector3 fwdUp = up;
                 _rb.AddTorque(right * (move.y * airPitchTorque), ForceMode.Acceleration);
-                _rb.AddTorque(fwdUp * (move.x * airYawTorque), ForceMode.Acceleration);
+                _rb.AddTorque(up * (move.x * airYawTorque), ForceMode.Acceleration);
             }
         }
 

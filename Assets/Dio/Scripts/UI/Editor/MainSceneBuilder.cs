@@ -25,10 +25,12 @@ namespace Dio.UI.EditorTools
         const string LevelsDir = DioRoot + "/Levels";
         const string DefaultLevelPath = LevelsDir + "/DefaultLevel.asset";
 
-        [MenuItem("Tools/Dio/Build/All (Player + NetMgr + Level + Main Scene)", priority = 0)]
+        [MenuItem("Tools/Dio/Build/All (Player + NetMgr + Car + Powerups + Level + Main Scene)", priority = 0)]
         public static void BuildAll()
         {
             BuildPlayerPrefab();
+            Dio.Player.EditorTools.CarPrefabBuilder.BuildCarPrefab();
+            Dio.Powerups.EditorTools.PowerupPrefabBuilder.BuildAll();
             BuildNetworkManagerPrefab();
             BuildDefaultLevel();
             BuildMainScene();
@@ -88,6 +90,12 @@ namespace Dio.UI.EditorTools
             disc.transport = transport;
             mgr.discovery = disc;
 
+            // Wire car prefab + default level if they exist.
+            var car = AssetDatabase.LoadAssetAtPath<GameObject>("Assets/Dio/Prefabs/Car.prefab");
+            if (car != null) mgr.carPrefab = car;
+            var lvl = AssetDatabase.LoadAssetAtPath<LevelData>("Assets/Dio/Levels/DefaultLevel.asset");
+            if (lvl != null) mgr.defaultLevel = lvl;
+
             var prefab = PrefabUtility.SaveAsPrefabAsset(go, NetMgrPrefabPath);
             Object.DestroyImmediate(go);
             Debug.Log($"[Dio] Built network manager prefab at {NetMgrPrefabPath}");
@@ -120,11 +128,22 @@ namespace Dio.UI.EditorTools
             var netInstance = (GameObject)PrefabUtility.InstantiatePrefab(netMgrPrefab);
             netInstance.name = "DioNetworkManager";
 
-            // Race bootstrap (handles solo-test spawn + race-start spawn).
+            // Race bootstrap (handles client-side scene visuals + camera attach).
             var raceGo = new GameObject("RaceBootstrap");
             var rb = raceGo.AddComponent<RaceBootstrap>();
             rb.defaultLevel = AssetDatabase.LoadAssetAtPath<LevelData>(DefaultLevelPath);
             rb.autoStartInEditor = false;
+
+            // Powerup bootstrap (registers effects + spawnable prefabs).
+            var puGo = new GameObject("PowerupBootstrap");
+            var pu = puGo.AddComponent<Dio.Powerups.PowerupBootstrap>();
+            pu.bananaPrefab     = AssetDatabase.LoadAssetAtPath<GameObject>("Assets/Dio/Prefabs/Powerups/Banana.prefab");
+            pu.oilSlickPrefab   = AssetDatabase.LoadAssetAtPath<GameObject>("Assets/Dio/Prefabs/Powerups/OilSlick.prefab");
+            pu.greenShellPrefab = AssetDatabase.LoadAssetAtPath<GameObject>("Assets/Dio/Prefabs/Powerups/GreenShell.prefab");
+            pu.blueShellPrefab  = AssetDatabase.LoadAssetAtPath<GameObject>("Assets/Dio/Prefabs/Powerups/BlueShell.prefab");
+            pu.bobombPrefab     = AssetDatabase.LoadAssetAtPath<GameObject>("Assets/Dio/Prefabs/Powerups/Bobomb.prefab");
+            pu.tornadoPrefab    = AssetDatabase.LoadAssetAtPath<GameObject>("Assets/Dio/Prefabs/Powerups/Tornado.prefab");
+            pu.powerupBoxPrefab = AssetDatabase.LoadAssetAtPath<GameObject>("Assets/Dio/Prefabs/Powerups/PowerupBox.prefab");
 
             // Canvas.
             var canvasGo = new GameObject("MainCanvas", typeof(RectTransform), typeof(Canvas), typeof(CanvasScaler), typeof(GraphicRaycaster));

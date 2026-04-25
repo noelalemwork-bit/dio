@@ -321,7 +321,7 @@ namespace Dio.UI
             ShowIdle();
         }
 
-        void OnRaceStartedLocally(bool _)
+        void OnRaceStartedLocally(bool _, RaceStartMessage __)
         {
             // For now we just hide the menu UI; the race scene/spawner takes it from here.
             gameObject.SetActive(false);

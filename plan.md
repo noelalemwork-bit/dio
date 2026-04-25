@@ -205,8 +205,112 @@ Stored in `Assets/Dio/Scripts/Common/ColorPalette.cs` as a `static readonly Colo
 - **M4.** Track theming pass — mountains, trees, water — driven by a `BiomePainter` that runs over the geodesic spline. ProBuilder for early hand-placed props.
 - **M5.** Online (NAT-traversed) play — replace LAN discovery with a relay or `Edgegap` (Mirror has the example wired up).
 
-## 10. Open questions
+## 10. Powerups
+
+15 designs grouped by behaviour pattern. The first 10 are implemented; the rest are stubbed in `PowerupKind` for M2.
+
+### 10.1 The 15
+
+| # | Name | Pattern | State applied | Notes |
+|---|---|---|---|---|
+| 1 | **Boost** | self-buff | `SpeedBoostState` | +45 % max speed for 1.4 s |
+| 2 | **Triple Boost** | self-buff (3 charges) | `SpeedBoostState × 3` | `PowerupHolder.charges` |
+| 3 | **Star** | self-buff | `StarState` | +20 % speed, invincible (collision filtering hook on `CarStateMachine.IsInvincible`) |
+| 4 | **Lightning** | global | `ShrunkState` to all others | server iterates `NetworkServer.spawned` |
+| 5 | **Banana** | static hazard | `SlipperyState (Random)` | drop behind, despawns on touch |
+| 6 | **Oil Slick** | static area | `SlipperyState (ZeroSteer)` | refreshes while inside |
+| 7 | **Green Shell** | projectile | `TumbleState` | bounces twice, server-physics rigidbody |
+| 8 | **Blue Shell** | projectile (tracker) | `TumbleState` AOE | glides surface-locked toward leader, AOE on impact |
+| 9 | **Bob-omb** | projectile (fuse) | `TumbleState` AOE | fuse 2 s OR collision → explosion |
+| 10 | **Tornado** | wandering kinematic | `TumbleState` + upward impulse | deterministic circle on the surface |
+| 11 | Red Shell | projectile (homing) | `TumbleState` | M2 — same prefab, different controller |
+| 12 | Freeze Ray | beam | `FrozenState` | M2 — line-cast on trigger |
+| 13 | Confusion | targeted debuff | reversed-steer state | M2 — needs target picker UI |
+| 14 | Magnet | radial pull | (no state — force only) | M2 |
+| 15 | Spring Trap | static hazard | (impulse only) | M2 — `Rigidbody.AddForce(VelocityChange)` |
+
+### 10.2 Architecture
+
+```
+CarStateMachine        ─ NetworkBehaviour, server-authoritative
+   ├ List<CarState>    ─ active states this frame
+   └ SyncList<int>     ─ active kinds for client visuals (shrunk scale, star glow…)
+
+CarState (abstract)    ─ Duration, Elapsed, ModifyInputs(), ModifyController()
+
+PowerupHolder          ─ NetworkBehaviour, one slot + `charges` for stacked
+   ├ SyncVar held      ─ PowerupKind
+   └ CmdActivate()     ─ asks PowerupRegistry for the effect, runs it server-side
+
+PowerupBox             ─ NetworkBehaviour trigger, despawn + respawn timer
+PowerupRegistry (static) ─ Kind → Effect, Kind → Prefab, available pool for boxes
+PowerupBootstrap       ─ MonoBehaviour in the scene; registers everything in Awake
+
+PowerupEffect (abstract)
+   ├ Self-buff effects → CarStateMachine.Apply(...)
+   ├ Global effects    → iterate NetworkServer.spawned, apply to others
+   ├ SpawnBehind / SpawnForward effects → Instantiate prefab + NetworkServer.Spawn
+   └ Tornado effect    → spawn deterministic kinematic
+```
+
+### 10.3 Obstacle archetypes
+
+| Archetype | Base class | Sync model | Examples |
+|---|---|---|---|
+| **Static** | `Obstacle` (trigger only) | `NetworkServer.Spawn` + NetworkTransform (immobile) | Banana, Spring Trap |
+| **Kinematic** | `Obstacle` + deterministic motion | NetworkTransform; can also be reproduced from time + seed locally if we ever want zero-bandwidth | Tornado, future fans / windmills |
+| **Projectile** | `Obstacle` + Rigidbody | server-only physics; clients see via NetworkTransform | Green Shell, Bob-omb |
+
+`Obstacle.ownerConnectionId` + `ownerImmunityWindow` keeps you from blowing yourself up the instant you drop a banana.
+
+### 10.4 Why these network primitives
+
+- **Inputs upload-only** at 30 Hz via `[Command]` from the local player to the server. No client-side prediction in M1; the server runs the only authoritative simulation. Phase B (M3) swaps the local-player car onto Mirror's `PredictedRigidbody`.
+- **Cars are kinematic on remote clients.** Their `Rigidbody.isKinematic = true` after `OnStartClient` on non-server peers, so `NetworkTransform` interpolation drives them — no double simulation.
+- **Obstacles are server-physics only.** Same kinematic-on-remote pattern.
+- **State changes are SyncVars + a SyncList of active kinds.** Per-tick remaining time isn't synced — clients only need to know "is shrunk, is starred" for visuals.
+
+## 11. Audit (M1 status)
+
+| Area | Status | Notes |
+|---|---|---|
+| Networking core (Discovery, Manager, Player, RaceStartMessage) | ✅ done | Solo bypass works; host double-handler bug fixed |
+| Server-side car spawn from prefab + authority assignment | ✅ done | `DioNetworkManager.ServerSpawnCarsForAllPlayers` |
+| Networked input replication | ✅ done | `DioCar.CmdSendInputs` at 30 Hz, server-authoritative simulation |
+| Car prefab (chassis + 4 wheel colliders + visuals + NetworkIdentity + NetworkTransform) | ✅ done | `Tools → Dio → Build → Car Prefab` |
+| Spherical gravity + arcade controller + 3-mode camera | ✅ done | Tab cycles modes |
+| Powerup state machine, holder, box, 10 effects | ✅ done | See §10 |
+| Obstacle base + 6 concrete obstacles (banana, oil slick, green/blue shell, bob-omb, tornado) | ✅ done | Placeholder spheres + 3D-text labels via `Billboard` |
+| Main UI scene (Trackmania-style menu, host/join, lobby) with name+color gating | ✅ done | `Tools → Dio → Build → All` |
+| Level editor window (orbit, click-add, drag-move, geodesic preview, auto-save) | ✅ done | `Tools → Dio → Open Level Editor` |
+| `ITrackSurface` abstraction | ✅ done | `SphereTrackSurface` is the M1 implementation |
+| SVG placeholders | ✅ done | Flag, Planet, Bolt — wire into Main scene with `SVGImage` after `com.unity.modules.vectorgraphics` is enabled |
+| Procedural track mesh | ❌ M2 | `LevelData` already feeds into a future `TrackMeshBuilder`; today the geodesic is shown via `LineRenderer` |
+| Lap / finish detection | ❌ M2 | Need a per-car arc-length tracker; Blue Shell currently uses a placeholder "leader" picker |
+| Predicted rigidbody for local player | ❌ M3 | Plan section §4.3 Phase B |
+| Asmdefs for Dio code | ⏳ deferred | All Dio scripts compile into `Assembly-CSharp` for now; revisit when build times bite |
+
+### 11.1 Known bugs / sharp edges
+
+- **Solo-bypass no-player branch** (`_players.Count == 0`): the spawned car has no authority, so the host can't drive it. Normally never hit because StartHost adds a DioPlayer for the local connection — but if you bypass the menu, you'll see a static car. Workaround: always go through "Host Game" in the menu.
+- **Blue Shell target selection** is a placeholder dot-product. Replace with the M2 arc-length-progress tracker.
+- **Visual SVG hookup** is still placeholder colored rects in `MainSceneBuilder` until you swap them for `SVGImage` (the package is included but the loading path isn't yet wired).
+- **PowerupHolder activation** uses `E` by default — wire `activateAction` in the inspector to a real Input System binding when adding controller support.
+
+### 11.2 How to run the demo
+
+1. Open the project in Unity 6.
+2. `Tools → Dio → Build → All` — generates prefabs, default level, and the Main scene.
+3. Open `Assets/Dio/Scenes/Main.unity`.
+4. Press Play. Type a name, pick a color, click **Host Game**.
+5. Click **Start Race** — the planet appears, the car spawns at the start point oriented along the geodesic.
+6. WASD/arrows to drive, Space brake, Shift handbrake, Tab to cycle camera, E to fire your held powerup.
+
+To test multiplayer: build a standalone, run host in editor, connect with the standalone via discovery.
+
+## 12. Open questions
 
 - **Bank angle** for fast cornering — defer until we have track-mesh sweeping; tracked in `TrackPoint.bank`.
 - **Wraparound finish line** vs. **point-to-point** races — both are easy on a geodesic; choose per-level.
 - **Min players for "real" game.** 4 is the design target; the code uses `minPlayers = 1` during development.
+- **Powerup balance.** 10 powerups in a 4-player race needs probability tuning per leaderboard position (the MK trick where last place gets the good stuff). Stub: `PowerupRegistry.RandomFromBox()` uses uniform — extend to `RandomForCar(DioCar c, int rank)` once a leaderboard exists.
