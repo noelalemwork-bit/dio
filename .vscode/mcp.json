@@ -1,0 +1,13 @@
+{
+	"servers": {
+		"mirror-docs": {
+			"url": "https://mirror-networking.gitbook.io/docs/~gitbook/mcp",
+			"type": "http"
+		},
+		"unity-mcp": {
+			"url": "http://127.0.0.1:8080",
+			"type": "http"
+		}
+	},
+	"inputs": []
+}
