@@ -285,10 +285,11 @@ PowerupEffect (abstract)
 | Level editor window (orbit, click-add, drag-move, geodesic preview, auto-save) | ✅ done | `Tools → Dio → Open Level Editor` |
 | `ITrackSurface` abstraction | ✅ done | `SphereTrackSurface` is the M1 implementation |
 | SVG placeholders | ✅ done | Flag, Planet, Bolt — wire into Main scene with `SVGImage` after `com.unity.modules.vectorgraphics` is enabled |
-| Procedural track mesh | ❌ M2 | `LevelData` already feeds into a future `TrackMeshBuilder`; today the geodesic is shown via `LineRenderer` |
+| Procedural track mesh | ❌ M2 | `LevelData` already feeds into a future `TrackMeshBuilder`; today the geodesic is shown via `LineRenderer` only — there's no driveable track surface yet beyond the sphere itself |
 | Lap / finish detection | ❌ M2 | Need a per-car arc-length tracker; Blue Shell currently uses a placeholder "leader" picker |
 | Predicted rigidbody for local player | ❌ M3 | Plan section §4.3 Phase B |
-| Asmdefs for Dio code | ⏳ deferred | All Dio scripts compile into `Assembly-CSharp` for now; revisit when build times bite |
+| SVG corner accents | ⏳ partial | The `.svg` files exist under `Assets/Dio/UI/Svg/` and the scene builder tries to load them as Sprites; without the optional `com.unity.vectorgraphics` package they don't import as Sprites and we fall back to flat colored rects. Install the package to enable. |
+| Asmdefs for Dio code | ⏳ deferred | All Dio scripts (runtime + editor) compile into `Assembly-CSharp` / `Assembly-CSharp-Editor`. Verified clean — no stray asmdefs. Revisit when build times bite. |
 
 ### 11.1 Known bugs / sharp edges
 
@@ -300,13 +301,28 @@ PowerupEffect (abstract)
 ### 11.2 How to run the demo
 
 1. Open the project in Unity 6.
-2. `Tools → Dio → Build → All` — generates prefabs, default level, and the Main scene.
-3. Open `Assets/Dio/Scenes/Main.unity`.
-4. Press Play. Type a name, pick a color, click **Host Game**.
-5. Click **Start Race** — the planet appears, the car spawns at the start point oriented along the geodesic.
-6. WASD/arrows to drive, Space brake, Shift handbrake, Tab to cycle camera, E to fire your held powerup.
+2. **First-time only**: `Window → TextMeshPro → Import TMP Essential Resources`. The build menus fail-fast if this is missing.
+3. `Tools → Dio → Build → All` — generates prefabs (player, car, all powerup obstacles), default level, network-manager prefab, and the Main scene.
+4. Open `Assets/Dio/Scenes/Main.unity`.
+5. Press Play. Type a name, pick a color, click **Host Game**.
+6. Click **Start Race** — the menu canvas hides, the planet appears, the car spawns at the start point oriented along the geodesic.
+7. WASD/arrows to drive, Space brake, Shift handbrake, Tab to cycle camera, E to fire your held powerup.
 
 To test multiplayer: build a standalone, run host in editor, connect with the standalone via discovery.
+
+### 11.3 Editor menu reference
+
+| Menu | What it does |
+|---|---|
+| `Tools → Dio → Build → All` | One-click build of everything below |
+| `Tools → Dio → Build → Player Prefab` | `Assets/Dio/Prefabs/DioPlayer.prefab` (NetworkIdentity + DioPlayer) |
+| `Tools → Dio → Build → Car Prefab` | `Assets/Dio/Prefabs/Car.prefab` (chassis + 4 wheels + colliders + Mirror + Dio components) |
+| `Tools → Dio → Build → Network Manager Prefab` | `Assets/Dio/Prefabs/DioNetworkManager.prefab` (KCP transport, NetworkDiscovery, wired car + level refs) |
+| `Tools → Dio → Build → Default Level Asset` | Creates `DefaultLevel.asset` only if it doesn't exist (idempotent — won't overwrite hand-edits) |
+| `Tools → Dio → Build → Main Scene` | Rebuilds `Main.unity` from scratch — drops the canvas, controller, race bootstrap, powerup bootstrap |
+| `Tools → Dio → Build → Powerup Prefabs` | All networked obstacle/box prefabs + their material assets |
+| `Tools → Dio → New Level` | Creates a *brand new* `LevelData` asset under `Assets/Dio/Levels/` (unique filename) and opens the editor on it. Use this to author additional tracks; **Default Level Asset only ever recreates `DefaultLevel.asset`**. |
+| `Tools → Dio → Open Level Editor` | Opens the orbit-and-edit window for whichever level is currently selected |
 
 ## 12. Open questions
 

@@ -170,9 +170,12 @@ namespace Dio.UI.EditorTools
             var bg = AddImage(canvasGo.transform, "BG", new Color(1.00f, 0.94f, 0.78f), stretch:true);
             bg.transform.SetSiblingIndex(0);
 
-            // Decorative corner accents (placeholder until we drop SVGs).
-            AddCornerAccent(canvasGo.transform, new Color(0.95f, 0.61f, 0.16f, 1f), Vector2.up + Vector2.left, "TopLeft");   // orange
-            AddCornerAccent(canvasGo.transform, new Color(0.36f, 0.72f, 0.37f, 1f), Vector2.right + Vector2.down, "BottomRight"); // green
+            // Decorative corner accents. If the com.unity.vectorgraphics package is
+            // installed and the SVG files in Assets/Dio/UI/Svg/ have been imported
+            // as Sprites, we use them directly; otherwise we fall back to flat
+            // colored rects with the brand colors.
+            AddCornerAccent(canvasGo.transform, new Color(0.95f, 0.61f, 0.16f, 1f), Vector2.up + Vector2.left,    "TopLeft",     "Flag");
+            AddCornerAccent(canvasGo.transform, new Color(0.36f, 0.72f, 0.37f, 1f), Vector2.right + Vector2.down, "BottomRight", "Planet");
 
             // ---- Top bar ----
             var topBar = AddPanel(canvasGo.transform, "TopBar", new Color(1f, 1f, 1f, 0.85f));
@@ -392,15 +395,31 @@ namespace Dio.UI.EditorTools
             return img;
         }
 
-        static void AddCornerAccent(Transform parent, Color color, Vector2 anchor, string name)
+        static void AddCornerAccent(Transform parent, Color color, Vector2 anchor, string name, string svgAssetName = null)
         {
             var go = new GameObject($"Accent_{name}", typeof(RectTransform), typeof(Image));
             go.transform.SetParent(parent, false);
             var img = go.GetComponent<Image>();
-            img.color = color;
             img.raycastTarget = false;
+
+            // Try the SVG-imported Sprite. Returns null if vectorgraphics package
+            // isn't installed (it imports .svg as a Sprite asset).
+            Sprite svgSprite = null;
+            if (!string.IsNullOrEmpty(svgAssetName))
+                svgSprite = AssetDatabase.LoadAssetAtPath<Sprite>($"Assets/Dio/UI/Svg/{svgAssetName}.svg");
+
+            if (svgSprite != null)
+            {
+                img.sprite = svgSprite;
+                img.color = Color.white;             // let the SVG's own colors show through
+                img.preserveAspect = true;
+            }
+            else
+            {
+                img.color = color;                   // fallback: flat color block
+            }
+
             var rt = (RectTransform)go.transform;
-            // Anchor is one of (0,1), (1,0), etc.
             rt.anchorMin = new Vector2(Mathf.Clamp01(anchor.x), Mathf.Clamp01(anchor.y));
             rt.anchorMax = rt.anchorMin;
             rt.pivot = rt.anchorMin;
