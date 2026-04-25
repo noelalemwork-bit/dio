@@ -132,17 +132,27 @@ namespace Dio.Player.EditorTools
             spring.spring = 35000; spring.damper = 4500; spring.targetPosition = 0.5f;
             wc.suspensionSpring = spring;
 
-            // Visual — cylinder, rotated so its axis is along X (since cylinder's default is Y).
-            var visualGo = GameObject.CreatePrimitive(PrimitiveType.Cylinder);
-            visualGo.name = name + "_Vis";
-            visualGo.transform.SetParent(parent, false);
-            visualGo.transform.localPosition = localPos;
-            visualGo.transform.localRotation = Quaternion.Euler(0, 0, 90);
-            visualGo.transform.localScale = new Vector3(0.8f, 0.2f, 0.8f);
-            // Wheels don't own collisions — wheel colliders do.
-            Object.DestroyImmediate(visualGo.GetComponent<CapsuleCollider>());
+            // Visual root — ArcadeCarController writes the WheelCollider's world
+            // pose to THIS transform every FixedUpdate. We wrap the cylinder
+            // mesh in this root so the 90° Z offset (which makes a Y-aligned
+            // cylinder mesh look like an X-spinning wheel) is preserved across
+            // pose writes.
+            var visualRoot = new GameObject(name + "_Vis");
+            visualRoot.transform.SetParent(parent, false);
+            visualRoot.transform.localPosition = localPos;
 
-            return new WheelRig { collider = wc, visual = visualGo.transform };
+            var mesh = GameObject.CreatePrimitive(PrimitiveType.Cylinder);
+            mesh.name = "Mesh";
+            mesh.transform.SetParent(visualRoot.transform, false);
+            // 90° around Z swaps the cylinder's height axis (Y) onto X — the
+            // axle direction the WheelCollider expects.
+            mesh.transform.localRotation = Quaternion.Euler(0, 0, 90);
+            // Cylinder primitive is 2u tall by 1u diameter. Scale: (diameter, half-height, diameter).
+            // Final: 0.8 diameter, 0.2 width along the axle.
+            mesh.transform.localScale = new Vector3(0.8f, 0.1f, 0.8f);
+            Object.DestroyImmediate(mesh.GetComponent<CapsuleCollider>());
+
+            return new WheelRig { collider = wc, visual = visualRoot.transform };
         }
 
         static void EnsureDir(string path)

@@ -82,7 +82,7 @@ MonoBehaviour:
   HostName: Host
   minPlayers: 1
   soloBypass: 1
-  carPrefab: {fileID: 7064156617382360707, guid: e30c99cbb46e05e44952f50730619729, type: 3}
+  carPrefab: {fileID: 5450060568472198494, guid: e30c99cbb46e05e44952f50730619729, type: 3}
   defaultLevel: {fileID: 11400000, guid: 66d0b8085b1ef2e4d8b6196e84ae128d, type: 2}
   discovery: {fileID: 8338235175104793699}
 --- !u!114 &6088571500757107199
@@ -134,7 +134,7 @@ MonoBehaviour:
   OnServerFound:
     m_PersistentCalls:
       m_Calls: []
-  secretHandshake: -1759053727222008081
+  secretHandshake: -1997613260397744839
   serverName: Dio Lobby
   defaultMaxPlayers: 8
   OnDioServerFound:

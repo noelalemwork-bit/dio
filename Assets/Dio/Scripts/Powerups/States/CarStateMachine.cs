@@ -9,6 +9,7 @@ namespace Dio.Powerups.States
     /// Server simulates; clients receive a SyncList of currently-active state
     /// kinds for visual indicators (glow, shrunk-scale, etc.).
     [RequireComponent(typeof(DioCar))]
+    [DefaultExecutionOrder(-50)] // after DioCar (-100), before ArcadeCarController (0)
     public class CarStateMachine : NetworkBehaviour
     {
         readonly List<CarState> _states = new List<CarState>();

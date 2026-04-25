@@ -10,9 +10,23 @@ namespace Dio.CameraRig
     public class RaceCamera : MonoBehaviour
     {
         public Transform target;
-        public ArcadeCarController car; // optional, for the cycle hook + speed FOV
         public SphericalGravity gravity; // pulled from target if null
         public RaceCameraMode mode = RaceCameraMode.Chase;
+
+        // Backed property so we re-subscribe on assignment. Awake runs the moment
+        // a component is added, which is BEFORE the assigner has a chance to set
+        // these refs — so the subscription has to live in the setter, not Awake.
+        [SerializeField] ArcadeCarController _car;
+        public ArcadeCarController car
+        {
+            get => _car;
+            set
+            {
+                if (_car != null) _car.OnCameraCycleRequested -= Cycle;
+                _car = value;
+                if (_car != null) _car.OnCameraCycleRequested += Cycle;
+            }
+        }
 
         [Header("Chase")]
         public float chaseDistance = 5.5f;
@@ -33,13 +47,13 @@ namespace Dio.CameraRig
             _cam = GetComponent<Camera>();
             if (_cam == null) _cam = Camera.main;
             if (target != null && gravity == null) gravity = target.GetComponent<SphericalGravity>();
-            if (target != null && car == null) car = target.GetComponent<ArcadeCarController>();
-            if (car != null) car.OnCameraCycleRequested += Cycle;
+            if (target != null && _car == null) car = target.GetComponent<ArcadeCarController>();
+            // Subscription happens via the property setter above.
         }
 
         void OnDestroy()
         {
-            if (car != null) car.OnCameraCycleRequested -= Cycle;
+            if (_car != null) _car.OnCameraCycleRequested -= Cycle;
         }
 
         public void Cycle()

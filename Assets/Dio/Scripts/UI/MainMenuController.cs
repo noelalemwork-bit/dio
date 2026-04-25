@@ -43,6 +43,10 @@ namespace Dio.UI
         public DioNetworkManager net;
         public DioNetworkDiscovery discovery;
 
+        [Header("Hide on race start")]
+        [Tooltip("The canvas hosting all menu UI. Disabled when the race begins.")]
+        public Canvas mainCanvas;
+
         readonly Dictionary<long, DioDiscoveryResponse> _discoveredServers = new();
         readonly List<GameObject> _spawnedBrowserRows = new();
         readonly List<GameObject> _spawnedLobbyRows = new();
@@ -323,8 +327,9 @@ namespace Dio.UI
 
         void OnRaceStartedLocally(bool _, RaceStartMessage __)
         {
-            // For now we just hide the menu UI; the race scene/spawner takes it from here.
-            gameObject.SetActive(false);
+            // Hide the whole canvas, not just this controller (which is a sibling).
+            if (mainCanvas != null) mainCanvas.gameObject.SetActive(false);
+            else gameObject.SetActive(false);
         }
 
         static void ClearChildren(Transform root, List<GameObject> tracked)

@@ -22,14 +22,15 @@ namespace Dio.Powerups
 
         void Awake() { _car = GetComponent<DioCar>(); }
 
-        public override void OnStartLocalPlayer()
+        public override void OnStartAuthority()
         {
             if (activateAction != null) activateAction.action.Enable();
         }
 
         void Update()
         {
-            if (!isLocalPlayer) return;
+            // Authority-based, not player-object based. See DioCar.Update.
+            if (!isOwned) return;
             if (held == PowerupKind.None && charges <= 0) return;
 
             bool pressed = false;

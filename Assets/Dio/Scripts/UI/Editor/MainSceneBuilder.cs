@@ -340,6 +340,7 @@ namespace Dio.UI.EditorTools
             ctrl.leaveButton = leaveBtn;
             ctrl.net = netInstance.GetComponent<DioNetworkManager>();
             ctrl.discovery = netInstance.GetComponent<DioNetworkDiscovery>();
+            ctrl.mainCanvas = canvas;
 
             EditorSceneManager.SaveScene(scene, MainScenePath);
 

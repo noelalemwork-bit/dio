@@ -58,14 +58,11 @@ namespace Dio.Player
             if (!isServer) _rb.isKinematic = true;
         }
 
-        public override void OnStartLocalPlayer()
-        {
-            // Nothing extra to do — Update() reads local inputs when isLocalPlayer.
-        }
-
         void Update()
         {
-            if (!isLocalPlayer) return;
+            // The car is OWNED by the connection but it's not the connection's
+            // player object (DioPlayer is). So `isOwned`, not `isLocalPlayer`.
+            if (!isOwned) return;
 
             // Throttle input upload to the server.
             if (Time.unscaledTime < _nextSendTime) return;
