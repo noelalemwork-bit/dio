@@ -202,7 +202,11 @@ namespace Dio.Net
         public void HostAndAdvertise()
         {
             StartHost();
-            if (discovery != null) discovery.AdvertiseServer();
+            if (discovery != null)
+            {
+                discovery.AdvertiseServer();
+                Debug.Log("[Dio] Hosting + advertising on UDP 47777. If clients can't see this server, check Windows Firewall (Unity / your standalone needs UDP inbound on this port). Direct-IP connect is available in the Browser panel as a fallback.");
+            }
         }
 
         public void StopAll()

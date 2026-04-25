@@ -57,6 +57,15 @@ These are vendored or fetched but **not committed**, so a fresh clone won't have
 - **Solo testing**: just click *Host Game* then *Start Race*. The host's `minPlayers = 1` + `soloBypass = true` lets you race alone.
 - **Two clients**: build a standalone (`File → Build Settings → Build`), run host in editor, run the standalone, click *Join Game* on the standalone — the host appears in the LAN browser via `Mirror.Discovery`.
 
+### Troubleshooting: "I can't see hosted games on my LAN"
+
+LAN discovery uses UDP broadcast on port `47777`. If clients see an empty list:
+
+1. **Windows Firewall.** Almost always the cause. The first time Unity / your build tries to bind UDP `47777`, Windows pops a "Allow access" dialog — if you missed it or hit Cancel, the inbound side is dropped. Open *Windows Security → Firewall & network protection → Allow an app through firewall* and tick **Private** for Unity (and your standalone build's `.exe`). On macOS / Linux the equivalent is `pfctl` / `ufw`.
+2. **Same-machine testing.** Windows doesn't reliably loopback `255.255.255.255` broadcasts between two processes on the same PC. Either test across two machines, *or* use the **Direct IP** fallback in the Browser panel (see below).
+3. **Direct IP fallback.** The browser panel has an "Or direct IP" input + Connect button. Enter the host's LAN IP (`ipconfig` on Windows, look for the `IPv4 Address` of your active adapter) and click **Connect**. Bypasses discovery entirely, just opens a KCP connection. Default port is 7777.
+4. **Console diagnostics.** With this build, the host logs `[Dio Discovery] ready. handshake=0x… protocol=v1` on startup and `[Dio Discovery] server got ping from …` for each request received. Clients log `[Dio Discovery] found '…' at …` on each successful response. If the host logs the ready line but never the "got ping" line, the broadcast isn't reaching it — go back to step 1.
+
 ## Project layout
 
 ```text
