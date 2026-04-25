@@ -129,6 +129,7 @@ namespace Dio.Net
             // Server-side spawning of cars. Client-side bootstrap (planet, camera)
             // is triggered via OnRaceStarted, which fires from the message handler.
             ServerSpawnCarsForAllPlayers();
+            ServerSpawnMidTrackPowerups();
 
             // Tell every client (host's local client included).
             NetworkServer.SendToAll(msg);
@@ -175,6 +176,67 @@ namespace Dio.Net
                 var carGo = Instantiate(carPrefab, pos, rot);
                 NetworkServer.Spawn(carGo);
             }
+        }
+
+        // Drops 5 mystery boxes in a row across the track at the geodesic
+        // midpoint. Each box is locked to a unique PowerupKind via SyncVar so
+        // every client sees the same payload distribution.
+        [Server]
+        void ServerSpawnMidTrackPowerups()
+        {
+            if (defaultLevel == null || !defaultLevel.HasMinimum) return;
+            var pu = FindAnyObjectByType<Dio.Powerups.PowerupBootstrap>();
+            if (pu == null || pu.powerupBoxPrefab == null)
+            {
+                Debug.LogWarning("[Dio] No PowerupBootstrap or powerupBoxPrefab — skipping mid-track row.");
+                return;
+            }
+
+            // Pool of distinct kinds the mid-track row can dispense.
+            var pool = new System.Collections.Generic.List<Dio.Powerups.PowerupKind>
+            {
+                Dio.Powerups.PowerupKind.Boost,
+                Dio.Powerups.PowerupKind.Star,
+                Dio.Powerups.PowerupKind.Lightning,
+                Dio.Powerups.PowerupKind.Banana,
+                Dio.Powerups.PowerupKind.OilSlick,
+                Dio.Powerups.PowerupKind.GreenShell,
+                Dio.Powerups.PowerupKind.BlueShell,
+                Dio.Powerups.PowerupKind.Bobomb,
+                Dio.Powerups.PowerupKind.Tornado,
+            };
+
+            const int rowSize = 5;
+            var picked = new System.Collections.Generic.List<Dio.Powerups.PowerupKind>(rowSize);
+            for (int i = 0; i < rowSize && pool.Count > 0; i++)
+            {
+                int idx = Random.Range(0, pool.Count);
+                picked.Add(pool[idx]);
+                pool.RemoveAt(idx);
+            }
+
+            // Build the local Frenet frame at the geodesic midpoint and lay
+            // the row out evenly across the track width.
+            Vector3 mid = Dio.Level.TrackBuilder.SampleAt(defaultLevel, 0.5f);
+            Vector3 midDir = mid.normalized;
+            Vector3 tangent = Dio.Level.TrackBuilder.TangentAt(defaultLevel, 0.5f);
+            Vector3 right = Vector3.Cross(tangent, midDir).normalized;
+
+            float trackW = defaultLevel.trackWidth;
+            float spacing = trackW / (picked.Count + 1f);
+
+            for (int i = 0; i < picked.Count; i++)
+            {
+                float lateral = -trackW * 0.5f + spacing * (i + 1);
+                Vector3 boxPos = mid + midDir * 1.0f + right * lateral;
+                var go = Instantiate(pu.powerupBoxPrefab, boxPos,
+                    Quaternion.LookRotation(tangent, midDir));
+                var box = go.GetComponent<Dio.Powerups.PowerupBox>();
+                if (box != null) box.forceKind = picked[i];
+                NetworkServer.Spawn(go);
+            }
+
+            Debug.Log($"[Dio] Mid-track row spawned: {string.Join(", ", picked)}");
         }
 
         static void ComputeStartTransform(Dio.Level.LevelData level, int slot, out Vector3 pos, out Quaternion rot)

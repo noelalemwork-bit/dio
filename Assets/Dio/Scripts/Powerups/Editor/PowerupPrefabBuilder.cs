@@ -66,6 +66,30 @@ namespace Dio.Powerups.EditorTools
             return mat;
         }
 
+        /// Like GetOrCreateColoredMat but lets the caller pick the shader
+        /// (e.g. Dio/MysteryBox), so the saved .mat persists shader properties
+        /// that the standard "color" field can't express.
+        static Material GetOrCreateMatNamed(string materialName, Shader shader, Color baseColor)
+        {
+            EnsureDir(MaterialsDir);
+            string path = $"{MaterialsDir}/{materialName}.mat";
+            var mat = AssetDatabase.LoadAssetAtPath<Material>(path);
+            if (mat == null)
+            {
+                mat = new Material(shader != null ? shader : Shader.Find("Standard"));
+                if (mat.HasProperty("_BaseColor")) mat.SetColor("_BaseColor", baseColor);
+                else mat.color = baseColor;
+                AssetDatabase.CreateAsset(mat, path);
+            }
+            else if (mat.shader != shader && shader != null)
+            {
+                mat.shader = shader;
+                if (mat.HasProperty("_BaseColor")) mat.SetColor("_BaseColor", baseColor);
+                EditorUtility.SetDirty(mat);
+            }
+            return mat;
+        }
+
         static GameObject NewSphere(string name, Color color, float radius, bool isTrigger)
         {
             var go = GameObject.CreatePrimitive(PrimitiveType.Sphere);
@@ -115,11 +139,30 @@ namespace Dio.Powerups.EditorTools
 
         static GameObject BuildBox()
         {
-            var go = NewSphere("PowerupBox", new Color(1f, 0.85f, 0.2f, 1f), 1.0f, true);
+            // Mystery box: a spinning cube with the Dio/MysteryBox shader (yellow
+            // base + slow rainbow shimmer) and a question-mark label floating
+            // above it. The whole thing is networked via NetworkIdentity +
+            // NetworkTransform; the spin itself is local-only (each peer
+            // animates independently) since it's purely cosmetic.
+            var go = GameObject.CreatePrimitive(PrimitiveType.Cube);
+            go.name = "PowerupBox";
+            go.transform.localScale = Vector3.one * 1.4f;
+            var box = go.GetComponent<BoxCollider>();
+            box.isTrigger = true;
+            box.size = Vector3.one * 1.5f;
+
+            var rend = go.GetComponent<Renderer>();
+            if (rend != null)
+            {
+                var sh = Shader.Find("Dio/MysteryBox") ?? Shader.Find("Standard");
+                rend.sharedMaterial = GetOrCreateMatNamed("PU_MysteryBox", sh, new Color(0.95f, 0.78f, 0.20f));
+            }
+
             go.AddComponent<NetworkIdentity>();
-            var nt = AddNetworkTransform(go);
+            AddNetworkTransform(go);
             go.AddComponent<PowerupBox>();
-            AddLabel(go.transform, "?", 1.5f);
+            go.AddComponent<Dio.Common.SpinningProp>();
+            AddLabel(go.transform, "?", 1.7f);
             return SaveAndDestroy(go, "PowerupBox");
         }
 

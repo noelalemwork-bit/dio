@@ -123,10 +123,14 @@ namespace Dio.Player
             foreach (var r in _renderers)
             {
                 if (r == null) continue;
-                // Tint only renderers tagged with material name "Body*"; leave wheels black.
-                var name = r.gameObject.name;
-                if (name.StartsWith("Body") || name.StartsWith("Cabin"))
-                    r.material.color = name.StartsWith("Cabin") ? col * 0.85f : col;
+                var goName = r.gameObject.name;
+                if (goName != "Body" && goName != "Cabin") continue;
+
+                // r.material auto-instantiates a per-renderer material at runtime
+                // — that's the intended path here (not the edit-mode warning case).
+                Color tint = goName == "Cabin" ? col * 0.7f : col;
+                if (r.material.HasProperty("_ColorB")) r.material.SetColor("_ColorB", tint);
+                else r.material.color = tint;
             }
         }
 

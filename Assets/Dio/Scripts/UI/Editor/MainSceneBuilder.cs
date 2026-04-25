@@ -487,30 +487,40 @@ namespace Dio.UI.EditorTools
             var hudRootImg = hudRoot.GetComponent<Image>(); if (hudRootImg != null) hudRootImg.raycastTarget = false;
             hudRoot.SetActive(false);
 
-            // Minimap (top-left). Today: a static globe SVG. Future (plan §11.4):
-            // a RenderTexture from a top-down camera over the player; cars and
-            // pickups become UI markers parented to this transform so we can
-            // skip rendering them in the actual texture.
-            var minimapGo = new GameObject("Minimap", typeof(RectTransform));
+            // Minimap (top-left). RawImage shows the RenderTexture rendered by
+            // a dedicated MinimapCam camera pinned above the local player.
+            // Cars + powerup boxes appear as UI markers parented to MarkerRoot
+            // (spawned dynamically by MinimapRenderer at runtime) so the actual
+            // RT only contains the planet + track strip.
+            var minimapGo = new GameObject("Minimap", typeof(RectTransform), typeof(RawImage));
             minimapGo.transform.SetParent(hudRoot.transform, false);
             var minimapRt = (RectTransform)minimapGo.transform;
             minimapRt.anchorMin = new Vector2(0, 1); minimapRt.anchorMax = new Vector2(0, 1);
             minimapRt.pivot = new Vector2(0, 1);
             minimapRt.anchoredPosition = new Vector2(24, -24);
             minimapRt.sizeDelta = new Vector2(220, 220);
-            SvgIconLoader.AttachIcon(minimapGo, LoadSvg("hud_minimap"), Color.white);
+            var minimapImage = minimapGo.GetComponent<RawImage>();
+            minimapImage.color = Color.white;
+            minimapImage.raycastTarget = false;
 
-            // Player marker as a child of the minimap. The future minimap
-            // controller will move this in screen space based on the player's
-            // surface position; for now it sits at the centre as a placeholder.
-            var markerGo = new GameObject("PlayerMarker", typeof(RectTransform));
-            markerGo.transform.SetParent(minimapGo.transform, false);
-            var markerRt = (RectTransform)markerGo.transform;
-            markerRt.anchorMin = new Vector2(0.5f, 0.5f);
-            markerRt.anchorMax = new Vector2(0.5f, 0.5f);
-            markerRt.sizeDelta = new Vector2(28, 28);
-            markerRt.anchoredPosition = Vector2.zero;
-            SvgIconLoader.AttachIcon(markerGo, LoadSvg("hud_player_marker"), Color.white);
+            // Marker root - covers the same rect, parents the runtime UI markers.
+            // RectMask2D clips markers that fall outside the minimap rect (e.g. far-hemisphere players,
+            // or anything past the orthoSize).
+            var markerRootGo = new GameObject("MarkerRoot", typeof(RectTransform), typeof(RectMask2D));
+            markerRootGo.transform.SetParent(minimapGo.transform, false);
+            var markerRt = (RectTransform)markerRootGo.transform;
+            markerRt.anchorMin = Vector2.zero; markerRt.anchorMax = Vector2.one;
+            markerRt.offsetMin = Vector2.zero; markerRt.offsetMax = Vector2.zero;
+
+            // Dedicated minimap camera. Lives on its own GameObject; MinimapRenderer.LateUpdate
+            // re-positions it each frame above the local player.
+            var minimapCamGo = new GameObject("MinimapCam", typeof(Camera));
+            var mr = minimapCamGo.AddComponent<Dio.UI.MinimapRenderer>();
+            mr.minimapImage = minimapImage;
+            mr.markerRoot = markerRt;
+            mr.localPlayerMarker = LoadSvg("hud_player_marker");
+            mr.remotePlayerMarker = LoadSvg("hud_player_marker");
+            mr.powerupMarker = LoadSvg("hud_powerup_box");
 
             // Powerup slot (bottom-left). Frame is the dashed "?" SVG; the icon
             // sprite that overlays gets switched at runtime by RaceHUD.
@@ -592,6 +602,48 @@ namespace Dio.UI.EditorTools
             speedText.alignment = TextAlignmentOptions.MidlineRight;
             speedText.font = TMP_Settings.defaultFontAsset;
 
+            // Pickup banner (top-center). Hidden initially; RaceHUD fades it in
+            // for ~1.5s when the local player grabs a powerup. Built behind the
+            // position panel in sibling order so PositionPanel sits on top of any overlap.
+            var bannerGo = new GameObject("PickupBanner", typeof(RectTransform), typeof(Image), typeof(CanvasGroup));
+            bannerGo.transform.SetParent(hudRoot.transform, false);
+            var bannerRt = (RectTransform)bannerGo.transform;
+            bannerRt.anchorMin = new Vector2(0.5f, 1);
+            bannerRt.anchorMax = new Vector2(0.5f, 1);
+            bannerRt.pivot = new Vector2(0.5f, 1);
+            bannerRt.anchoredPosition = new Vector2(0, -36);
+            bannerRt.sizeDelta = new Vector2(560, 100);
+            var bannerBg = bannerGo.GetComponent<Image>();
+            bannerBg.color = new Color(0, 0, 0, 0.65f);
+            bannerBg.raycastTarget = false;
+            var bannerCg = bannerGo.GetComponent<CanvasGroup>();
+            bannerCg.alpha = 0f;
+
+            var bhg = bannerGo.AddComponent<HorizontalLayoutGroup>();
+            bhg.padding = new RectOffset(20, 20, 12, 12);
+            bhg.spacing = 20;
+            bhg.childAlignment = TextAnchor.MiddleCenter;
+            bhg.childControlWidth = false; bhg.childControlHeight = false;
+            bhg.childForceExpandWidth = false; bhg.childForceExpandHeight = false;
+
+            var bannerIconGo = new GameObject("Icon", typeof(RectTransform), typeof(Image));
+            bannerIconGo.transform.SetParent(bannerGo.transform, false);
+            ((RectTransform)bannerIconGo.transform).sizeDelta = new Vector2(72, 72);
+            var bannerIcon = bannerIconGo.GetComponent<Image>();
+            bannerIcon.preserveAspect = true;
+            bannerIcon.raycastTarget = false;
+
+            var bannerLabelGo = new GameObject("Label", typeof(RectTransform));
+            bannerLabelGo.transform.SetParent(bannerGo.transform, false);
+            ((RectTransform)bannerLabelGo.transform).sizeDelta = new Vector2(420, 72);
+            var bannerLabel = bannerLabelGo.AddComponent<TextMeshProUGUI>();
+            bannerLabel.text = "";
+            bannerLabel.fontSize = 44;
+            bannerLabel.fontStyle = FontStyles.Bold;
+            bannerLabel.alignment = TextAlignmentOptions.MidlineLeft;
+            bannerLabel.color = Color.white;
+            bannerLabel.font = TMP_Settings.defaultFontAsset;
+
             // Position tracker (top-right). Compact panel with a header + list.
             var posPanel = AddPanel(hudRoot.transform, "PositionPanel", new Color(0f, 0f, 0f, 0.4f));
             var posRt = (RectTransform)posPanel.transform;
@@ -627,12 +679,15 @@ namespace Dio.UI.EditorTools
             // RaceHUD component, wired with all the HUD refs + powerup icon map.
             var hudCtrl = hudRoot.AddComponent<RaceHUD>();
             hudCtrl.minimapRoot = minimapRt;
-            hudCtrl.minimapPlayerMarker = markerRt;
+            hudCtrl.minimapPlayerMarker = markerRt; // unused now; the MarkerRoot is the dynamic-spawn parent
             hudCtrl.powerupSlotIcon = slotIconImg;
             hudCtrl.powerupChargeLabel = chargeLabel;
             hudCtrl.speedLabel = speedText;
             hudCtrl.speedNeedle = needleRt;
             hudCtrl.positionLabel = posList;
+            hudCtrl.pickupBannerGroup = bannerCg;
+            hudCtrl.pickupBannerIcon = bannerIcon;
+            hudCtrl.pickupBannerLabel = bannerLabel;
             hudCtrl.iconEntries = BuildPowerupIconMap();
 
             // ---- Wire MainMenuController on a top-level controller GO ----

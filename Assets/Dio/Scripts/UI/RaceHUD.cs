@@ -45,6 +45,13 @@ namespace Dio.UI
         public int positionTopN = 4;
         public float positionUpdateInterval = 0.4f;
 
+        [Header("Pickup banner (shown briefly when a powerup is grabbed)")]
+        public CanvasGroup pickupBannerGroup;
+        public Image pickupBannerIcon;
+        public TMP_Text pickupBannerLabel;
+        public float pickupBannerHoldSeconds = 1.5f;
+        public float pickupBannerFadeSeconds = 0.35f;
+
         Dictionary<PowerupKind, Sprite> _iconMap;
         DioCar _localCar;
         PowerupHolder _localHolder;
@@ -57,6 +64,9 @@ namespace Dio.UI
         readonly System.Text.StringBuilder _positionSb = new System.Text.StringBuilder(128);
         readonly List<(string name, float dist, bool isMe)> _scratchEntries = new List<(string, float, bool)>(8);
 
+        float _bannerVisibleUntil;
+        bool _holderHooked;
+
         void Awake()
         {
             _iconMap = new Dictionary<PowerupKind, Sprite>();
@@ -67,6 +77,17 @@ namespace Dio.UI
             // Hide the slot icon until we have something to show.
             if (powerupSlotIcon != null) powerupSlotIcon.enabled = false;
             if (powerupChargeLabel != null) powerupChargeLabel.text = "";
+
+            if (pickupBannerGroup != null) pickupBannerGroup.alpha = 0f;
+        }
+
+        void OnDisable()
+        {
+            if (_localHolder != null && _holderHooked)
+            {
+                _localHolder.OnHeldChangedClient -= OnLocalHeldChanged;
+                _holderHooked = false;
+            }
         }
 
         void Update()
@@ -75,6 +96,46 @@ namespace Dio.UI
             if (_localHolder != null) RefreshPowerupSlot();
             if (_localController != null) RefreshSpeed();
             RefreshPositions();
+            RefreshPickupBanner();
+        }
+
+        void RefreshPickupBanner()
+        {
+            if (pickupBannerGroup == null) return;
+            float now = Time.unscaledTime;
+            if (now > _bannerVisibleUntil + pickupBannerFadeSeconds)
+            {
+                pickupBannerGroup.alpha = 0f;
+                return;
+            }
+            float fadeStart = _bannerVisibleUntil;
+            if (now <= fadeStart) pickupBannerGroup.alpha = 1f;
+            else
+            {
+                float fadeT = (now - fadeStart) / Mathf.Max(0.01f, pickupBannerFadeSeconds);
+                pickupBannerGroup.alpha = Mathf.Clamp01(1f - fadeT);
+            }
+        }
+
+        void OnLocalHeldChanged(PowerupKind kind)
+        {
+            if (kind == PowerupKind.None) return; // only flash on grab, not on consume
+            if (pickupBannerGroup == null) return;
+
+            if (pickupBannerIcon != null)
+            {
+                if (_iconMap.TryGetValue(kind, out var sprite))
+                {
+                    pickupBannerIcon.sprite = sprite;
+                    pickupBannerIcon.enabled = sprite != null;
+                }
+                else pickupBannerIcon.enabled = false;
+            }
+            if (pickupBannerLabel != null)
+                pickupBannerLabel.text = PowerupNames.Display(kind);
+
+            _bannerVisibleUntil = Time.unscaledTime + pickupBannerHoldSeconds;
+            pickupBannerGroup.alpha = 1f;
         }
 
         // Closest-to-finish proxy for race position. Replaced by a real
@@ -154,6 +215,11 @@ namespace Dio.UI
                 _localCar = car;
                 _localHolder = car.GetComponent<PowerupHolder>();
                 _localController = car.GetComponent<ArcadeCarController>();
+                if (_localHolder != null && !_holderHooked)
+                {
+                    _localHolder.OnHeldChangedClient += OnLocalHeldChanged;
+                    _holderHooked = true;
+                }
                 return;
             }
         }

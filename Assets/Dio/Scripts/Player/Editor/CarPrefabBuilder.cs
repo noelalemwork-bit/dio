@@ -6,69 +6,67 @@ using Dio.Player;
 
 namespace Dio.Player.EditorTools
 {
-    /// Builds the test Car prefab as actual editable assets (body + 4 wheel
-    /// colliders + visuals + NetworkIdentity + NetworkTransformReliable +
-    /// SphericalGravity + ArcadeCarController + DioCar).
+    /// Generates Assets/Dio/Prefabs/Car.prefab from an optional VehicleProfile.
+    /// Empty profile (or no profile at all) → all-procedural defaults: cube
+    /// body, cylinder wheels, procedural Dio shaders.
     ///
-    /// Re-running overwrites Assets/Dio/Prefabs/Car.prefab. This is the single
-    /// source of truth for the car for both solo testing and networked play.
+    /// CHASSIS-LOCAL CONVENTIONS used here (and matching VehicleProfile):
+    ///   * y = 0 is the road plane — wheels touch the ground at this height
+    ///     when the chassis pivot is on the road surface.
+    ///   * WheelCollider GameObjects sit at y = wheelRadius + suspensionDistance
+    ///     × suspensionTargetPos, so the wheel CENTER at rest is at y = radius
+    ///     and its bottom at y = 0.
     public static class CarPrefabBuilder
     {
-        const string PrefabsDir = "Assets/Dio/Prefabs";
+        const string PrefabsDir   = "Assets/Dio/Prefabs";
+        const string MaterialsDir = "Assets/Dio/Prefabs/Materials";
+        const string ProfilesDir  = "Assets/Dio/Vehicles";
         const string CarPrefabPath = PrefabsDir + "/Car.prefab";
+        const string DefaultProfilePath = ProfilesDir + "/DefaultKart.asset";
 
         [MenuItem("Tools/Dio/Build/Car Prefab")]
-        public static GameObject BuildCarPrefab()
+        public static GameObject BuildCarPrefab() => BuildCarPrefab(GetOrCreateDefaultProfile());
+
+        public static GameObject BuildCarPrefab(VehicleProfile profile)
         {
             EnsureDir(PrefabsDir);
+            EnsureDir(MaterialsDir);
+            if (profile == null) profile = GetOrCreateDefaultProfile();
 
-            var root = new GameObject("Car");
-            root.tag = "Untagged";
+            var root = new GameObject(string.IsNullOrEmpty(profile.displayName) ? "Car" : profile.displayName);
 
             // -- Rigidbody --
             var rb = root.AddComponent<Rigidbody>();
-            rb.mass = 800f;
-            rb.linearDamping = 0.1f;
-            rb.angularDamping = 0.4f;
+            rb.mass = profile.mass;
+            rb.linearDamping = profile.linearDamping;
+            rb.angularDamping = profile.angularDamping;
             rb.interpolation = RigidbodyInterpolation.Interpolate;
             rb.collisionDetectionMode = CollisionDetectionMode.ContinuousDynamic;
             rb.useGravity = false; // SphericalGravity drives gravity.
 
-            // -- Body visual + collider --
-            var body = GameObject.CreatePrimitive(PrimitiveType.Cube);
-            body.name = "Body";
-            body.transform.SetParent(root.transform, false);
-            body.transform.localScale = new Vector3(1.6f, 0.7f, 3.2f);
-            body.transform.localPosition = new Vector3(0, 0.6f, 0);
-            // Body collider provides a chassis hull for car↔car / car↔obstacle collisions.
-            // Wheel colliders only handle the ground contact — without a body collider, two cars
-            // would clip straight through each other.
-            // (Cube primitive already gives us a BoxCollider; tune its size to match the visual.)
-            // Material applied later for color tinting.
-
-            var cabin = GameObject.CreatePrimitive(PrimitiveType.Cube);
-            cabin.name = "Cabin";
-            cabin.transform.SetParent(root.transform, false);
-            cabin.transform.localScale = new Vector3(1.2f, 0.5f, 1.4f);
-            cabin.transform.localPosition = new Vector3(0, 1.15f, -0.2f);
-            // Remove cabin collider — only the body cube counts for collisions.
-            Object.DestroyImmediate(cabin.GetComponent<BoxCollider>());
+            // -- Body + cabin --
+            var bodyMat  = profile.bodyMaterial  != null ? profile.bodyMaterial  : GetOrCreateBodyMaterial();
+            var cabinMat = profile.cabinMaterial != null ? profile.cabinMaterial : bodyMat;
+            BuildPart(root.transform, "Body", profile.bodyMesh, profile.bodyOffset, profile.bodyScale, bodyMat,
+                      addCollider: profile.addBodyCollider);
+            if (profile.includeCabin)
+                BuildPart(root.transform, "Cabin", profile.cabinMesh, profile.cabinOffset, profile.cabinScale, cabinMat,
+                          addCollider: false);
 
             // -- Wheels --
-            var fl = BuildWheel(root.transform, new Vector3(-0.8f, 0.4f,  1.3f), "FL");
-            var fr = BuildWheel(root.transform, new Vector3( 0.8f, 0.4f,  1.3f), "FR");
-            var rl = BuildWheel(root.transform, new Vector3(-0.8f, 0.4f, -1.3f), "RL");
-            var rr = BuildWheel(root.transform, new Vector3( 0.8f, 0.4f, -1.3f), "RR");
+            var wheelMat = profile.wheelMaterial != null ? profile.wheelMaterial : GetOrCreateWheelMaterial();
+            var fl = BuildWheel(root.transform, profile, profile.frontLeftXZ,  "FL", wheelMat);
+            var fr = BuildWheel(root.transform, profile, profile.frontRightXZ, "FR", wheelMat);
+            var rl = BuildWheel(root.transform, profile, profile.rearLeftXZ,   "RL", wheelMat);
+            var rr = BuildWheel(root.transform, profile, profile.rearRightXZ,  "RR", wheelMat);
 
             // -- Mirror identity + transform sync --
-            var ni = root.AddComponent<NetworkIdentity>();
-            // NetworkTransformReliable: simple, snapshots position/rotation. Good enough for M1.
-            // Phase B (PredictedRigidbody) replaces this for the local player.
+            root.AddComponent<NetworkIdentity>();
             var ntype = System.Type.GetType("Mirror.NetworkTransformReliable, Mirror.Components")
                      ?? System.Type.GetType("Mirror.NetworkTransformUnreliable, Mirror.Components")
                      ?? System.Type.GetType("Mirror.NetworkTransform, Mirror.Components");
             if (ntype != null) root.AddComponent(ntype);
-            else Debug.LogWarning("[Dio] No NetworkTransform variant found — install Mirror.Components or wire it manually.");
+            else Debug.LogWarning("[Dio] No NetworkTransform variant found — install Mirror.Components.");
 
             // -- Dio components --
             var grav = root.AddComponent<SphericalGravity>();
@@ -76,7 +74,7 @@ namespace Dio.Player.EditorTools
             grav.alignSpeed = 8f;
 
             var ctrl = root.AddComponent<ArcadeCarController>();
-            ctrl.readLocalInput = false; // DioCar drives this over the network.
+            ctrl.readLocalInput = false;
             ctrl.frontAxle = new ArcadeCarController.Axle
             {
                 left = fl.collider, right = fr.collider,
@@ -99,60 +97,159 @@ namespace Dio.Player.EditorTools
             var prefab = PrefabUtility.SaveAsPrefabAsset(root, CarPrefabPath);
             Object.DestroyImmediate(root);
 
-            Debug.Log($"[Dio] Built car prefab at {CarPrefabPath}");
+            Debug.Log($"[Dio] Built car prefab '{profile.displayName}' at {CarPrefabPath}");
             return prefab;
         }
 
+        // ---------- helpers ----------
+
         struct WheelRig { public WheelCollider collider; public Transform visual; }
 
-        static WheelRig BuildWheel(Transform parent, Vector3 localPos, string name)
+        static void BuildPart(Transform parent, string name, Mesh mesh, Vector3 offset, Vector3 scale, Material material, bool addCollider)
         {
+            GameObject go;
+            if (mesh != null)
+            {
+                go = new GameObject(name, typeof(MeshFilter), typeof(MeshRenderer));
+                go.GetComponent<MeshFilter>().sharedMesh = mesh;
+                if (addCollider)
+                {
+                    var mc = go.AddComponent<MeshCollider>();
+                    mc.sharedMesh = mesh;
+                    mc.convex = true;
+                }
+            }
+            else
+            {
+                go = GameObject.CreatePrimitive(PrimitiveType.Cube);
+                go.name = name;
+                if (!addCollider)
+                {
+                    var bc = go.GetComponent<BoxCollider>();
+                    if (bc != null) Object.DestroyImmediate(bc);
+                }
+            }
+            go.transform.SetParent(parent, false);
+            go.transform.localPosition = offset;
+            go.transform.localScale = scale;
+            var r = go.GetComponent<MeshRenderer>();
+            if (r != null) r.sharedMaterial = material;
+        }
+
+        static WheelRig BuildWheel(Transform parent, VehicleProfile p, Vector3 chassisXZ, string name, Material wheelMat)
+        {
+            // WheelCollider GameObject — at chassis-local (x, WheelColliderY, z),
+            // so the wheel CENTER at rest is at y = wheelRadius and the bottom
+            // touches y = 0 (road plane = chassis pivot).
             var wcGo = new GameObject(name + "_WC");
             wcGo.transform.SetParent(parent, false);
-            wcGo.transform.localPosition = localPos;
+            wcGo.transform.localPosition = new Vector3(chassisXZ.x, p.WheelColliderY, chassisXZ.z);
             var wc = wcGo.AddComponent<WheelCollider>();
-            wc.radius = 0.4f;
-            wc.suspensionDistance = 0.25f;
+            wc.radius = p.wheelRadius;
+            wc.suspensionDistance = p.suspensionDistance;
             wc.mass = 20f;
             wc.wheelDampingRate = 0.25f;
 
             var fwd = wc.forwardFriction;
             fwd.extremumSlip = 0.4f; fwd.extremumValue = 1f;
             fwd.asymptoteSlip = 0.8f; fwd.asymptoteValue = 0.5f;
-            fwd.stiffness = 2.0f;
+            fwd.stiffness = p.forwardStiffness;
             wc.forwardFriction = fwd;
 
             var side = wc.sidewaysFriction;
             side.extremumSlip = 0.2f; side.extremumValue = 1f;
             side.asymptoteSlip = 0.5f; side.asymptoteValue = 0.75f;
-            side.stiffness = 2.4f; // high → no spinouts
+            side.stiffness = p.sidewaysStiffness;
             wc.sidewaysFriction = side;
 
             var spring = wc.suspensionSpring;
-            spring.spring = 35000; spring.damper = 4500; spring.targetPosition = 0.5f;
+            spring.spring = p.suspensionSpring;
+            spring.damper = p.suspensionDamper;
+            spring.targetPosition = p.suspensionTargetPos;
             wc.suspensionSpring = spring;
 
-            // Visual root — ArcadeCarController writes the WheelCollider's world
-            // pose to THIS transform every FixedUpdate. We wrap the cylinder
-            // mesh in this root so the 90° Z offset (which makes a Y-aligned
-            // cylinder mesh look like an X-spinning wheel) is preserved across
-            // pose writes.
+            // -- Visual root: ArcadeCarController writes WC world pose here.
+            // The cylinder mesh is a child with a baked 90° Z rotation so its
+            // long axis (default Y) becomes the wheel spin axis (X). Scaling
+            // the mesh maps the cylinder's natural (1u diameter, 2u height)
+            // to (2*radius, width).
             var visualRoot = new GameObject(name + "_Vis");
             visualRoot.transform.SetParent(parent, false);
-            visualRoot.transform.localPosition = localPos;
+            visualRoot.transform.localPosition = wcGo.transform.localPosition;
 
-            var mesh = GameObject.CreatePrimitive(PrimitiveType.Cylinder);
-            mesh.name = "Mesh";
-            mesh.transform.SetParent(visualRoot.transform, false);
-            // 90° around Z swaps the cylinder's height axis (Y) onto X — the
-            // axle direction the WheelCollider expects.
-            mesh.transform.localRotation = Quaternion.Euler(0, 0, 90);
-            // Cylinder primitive is 2u tall by 1u diameter. Scale: (diameter, half-height, diameter).
-            // Final: 0.8 diameter, 0.2 width along the axle.
-            mesh.transform.localScale = new Vector3(0.8f, 0.1f, 0.8f);
-            Object.DestroyImmediate(mesh.GetComponent<CapsuleCollider>());
+            GameObject mesh;
+            if (p.wheelMesh != null)
+            {
+                mesh = new GameObject("Mesh", typeof(MeshFilter), typeof(MeshRenderer));
+                mesh.GetComponent<MeshFilter>().sharedMesh = p.wheelMesh;
+                mesh.transform.SetParent(visualRoot.transform, false);
+                // Custom meshes must already be authored with X as axle. Apply
+                // user's wheel-mesh extra scale + radius/width as a fallback
+                // on top of any built-in mesh scale.
+                mesh.transform.localScale = new Vector3(p.wheelWidth, p.wheelRadius * 2f, p.wheelRadius * 2f);
+            }
+            else
+            {
+                mesh = GameObject.CreatePrimitive(PrimitiveType.Cylinder);
+                mesh.name = "Mesh";
+                mesh.transform.SetParent(visualRoot.transform, false);
+                mesh.transform.localRotation = Quaternion.Euler(0, 0, 90);
+                // Cylinder primitive: 1u diameter, 2u height. We want diameter = radius*2 and height = width.
+                // After 90° around Z, mesh-local Y is the axle, X/Z are diameter axes.
+                float diameter = p.wheelRadius * 2f;
+                mesh.transform.localScale = new Vector3(diameter, p.wheelWidth * 0.5f, diameter);
+                Object.DestroyImmediate(mesh.GetComponent<CapsuleCollider>());
+            }
+            var rend = mesh.GetComponent<MeshRenderer>();
+            if (rend != null) rend.sharedMaterial = wheelMat;
 
             return new WheelRig { collider = wc, visual = visualRoot.transform };
+        }
+
+        // ---------- material + profile asset helpers ----------
+
+        static VehicleProfile GetOrCreateDefaultProfile()
+        {
+            EnsureDir(ProfilesDir);
+            var existing = AssetDatabase.LoadAssetAtPath<VehicleProfile>(DefaultProfilePath);
+            if (existing != null) return existing;
+            var p = ScriptableObject.CreateInstance<VehicleProfile>();
+            p.displayName = "Default Kart";
+            AssetDatabase.CreateAsset(p, DefaultProfilePath);
+            AssetDatabase.SaveAssets();
+            return p;
+        }
+
+        static Material GetOrCreateBodyMaterial()
+        {
+            string path = MaterialsDir + "/CarBodyCamo.mat";
+            var m = AssetDatabase.LoadAssetAtPath<Material>(path);
+            if (m != null) return m;
+            var sh = Shader.Find("Dio/CarBodyCamo");
+            if (sh == null)
+            {
+                Debug.LogWarning("[Dio] Dio/CarBodyCamo shader not found, falling back to Standard.");
+                sh = Shader.Find("Standard");
+            }
+            m = new Material(sh) { name = "CarBodyCamo" };
+            AssetDatabase.CreateAsset(m, path);
+            return m;
+        }
+
+        static Material GetOrCreateWheelMaterial()
+        {
+            string path = MaterialsDir + "/CarWheel.mat";
+            var m = AssetDatabase.LoadAssetAtPath<Material>(path);
+            if (m != null) return m;
+            var sh = Shader.Find("Dio/CarWheel");
+            if (sh == null)
+            {
+                Debug.LogWarning("[Dio] Dio/CarWheel shader not found, falling back to Standard.");
+                sh = Shader.Find("Standard");
+            }
+            m = new Material(sh) { name = "CarWheel" };
+            AssetDatabase.CreateAsset(m, path);
+            return m;
         }
 
         static void EnsureDir(string path)

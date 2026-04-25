@@ -6,7 +6,7 @@ using Dio.CameraRig;
 
 namespace Dio.Level
 {
-    /// Client/host-side: builds the visible planet + geodesic preview line and
+    /// Client/host-side: builds the visible planet + procedural track strip and
     /// attaches the camera to the local player's car when it spawns. The car
     /// itself is server-spawned by DioNetworkManager.
     public class RaceBootstrap : MonoBehaviour
@@ -19,6 +19,16 @@ namespace Dio.Level
         /// tracker (closest-to-finish proxy until M2 lands the real arc-length tracker).
         public static LevelData CurrentLevel { get; private set; }
 
+        /// The procedural track-strip GameObject built by EnsureTrack. Kept
+        /// public so the minimap renderer can throw it (and the planet) onto a
+        /// dedicated layer.
+        public static GameObject CurrentTrack { get; private set; }
+
+        /// Layer index reserved for "things visible to the minimap camera" —
+        /// the planet and the track strip. Other things (cars, obstacles, UI)
+        /// stay off this layer so the minimap stays clean.
+        public const int MinimapLayer = 8;
+
         [Tooltip("Default level used if no race-start message has been received yet.")]
         public LevelData defaultLevel;
 
@@ -26,42 +36,29 @@ namespace Dio.Level
         public bool autoStartInEditor = false;
 
         GameObject _planet;
-        LineRenderer _trackLine;
+        GameObject _track;
         Camera _cam;
 
-        void Awake()
-        {
-            DioNetworkManager.OnRaceStarted += OnRaceStarted;
-        }
-
-        void OnDestroy()
-        {
-            DioNetworkManager.OnRaceStarted -= OnRaceStarted;
-        }
-
-        void Start()
-        {
-            if (autoStartInEditor) BuildVisualScene(defaultLevel);
-        }
+        void Awake() { DioNetworkManager.OnRaceStarted += OnRaceStarted; }
+        void OnDestroy() { DioNetworkManager.OnRaceStarted -= OnRaceStarted; }
+        void Start() { if (autoStartInEditor) BuildVisualScene(defaultLevel); }
 
         void OnRaceStarted(bool _, RaceStartMessage __) => BuildVisualScene(defaultLevel);
 
         void Update()
         {
-            // Once the local player's car appears, attach the camera.
             if (_planet == null) return;
             if (_cam != null && _cam.GetComponent<RaceCamera>() != null && _cam.GetComponent<RaceCamera>().target != null) return;
 
             DioCar local = null;
             if (NetworkClient.localPlayer != null)
             {
-                // The local "player" identity is the lobby DioPlayer; the car has its own NetworkIdentity owned by us.
                 foreach (var ni in NetworkClient.spawned.Values)
                 {
                     var car = ni != null ? ni.GetComponent<DioCar>() : null;
-                    if (car != null && car.isLocalPlayer) { local = car; break; }
-                    // Fallback: server-side host where isLocalPlayer is on the DioPlayer, not the car.
-                    if (car != null && car.isOwned) { local = car; break; }
+                    if (car == null) continue;
+                    if (car.isLocalPlayer) { local = car; break; }
+                    if (car.isOwned) { local = car; break; }
                 }
             }
             if (local != null) AttachCameraTo(local.transform);
@@ -78,7 +75,7 @@ namespace Dio.Level
             Debug.Log($"[RaceBootstrap] BuildVisualScene level='{level.name}' radius={level.planetRadius}");
             CurrentLevel = level;
             EnsurePlanet(level.planetRadius);
-            EnsureTrackLine(level);
+            EnsureTrack(level);
         }
 
         void EnsurePlanet(float radius)
@@ -86,39 +83,54 @@ namespace Dio.Level
             if (_planet != null) { CurrentPlanet = _planet; return; }
             _planet = GameObject.CreatePrimitive(PrimitiveType.Sphere);
             _planet.name = "Planet";
-            // No tag — we don't depend on Unity's TagManager. Lookup goes via CurrentPlanet.
             _planet.transform.position = Vector3.zero;
             _planet.transform.localScale = Vector3.one * radius * 2f;
+            _planet.layer = MinimapLayer;
+
             var rend = _planet.GetComponent<Renderer>();
-            if (rend != null) rend.material.color = new Color(0.42f, 0.65f, 0.42f, 1f);
+            if (rend != null)
+            {
+                var earthShader = Shader.Find("Dio/EarthPlanet");
+                if (earthShader != null)
+                {
+                    var mat = new Material(earthShader) { name = "EarthPlanet (runtime)" };
+                    rend.material = mat;
+                }
+                else
+                {
+                    rend.material.color = new Color(0.42f, 0.65f, 0.42f, 1f);
+                }
+            }
+
             CurrentPlanet = _planet;
         }
 
-        void EnsureTrackLine(LevelData level)
+        void EnsureTrack(LevelData level)
         {
-            if (_trackLine != null) Destroy(_trackLine.gameObject);
+            if (_track != null) Destroy(_track);
 
-            var go = new GameObject("TrackPreview");
-            go.transform.SetParent(_planet != null ? _planet.transform : null, true);
-            _trackLine = go.AddComponent<LineRenderer>();
-            _trackLine.useWorldSpace = true;
-            _trackLine.widthMultiplier = 0.6f;
-            _trackLine.material = new Material(Shader.Find("Sprites/Default"));
-            _trackLine.startColor = new Color(0.30f, 0.65f, 0.95f, 1f);
-            _trackLine.endColor = _trackLine.startColor;
+            var mesh = TrackBuilder.Build(level);
+            if (mesh == null) return;
 
-            const int segPerArc = 64;
-            var pts = new System.Collections.Generic.List<Vector3>();
-            for (int i = 0; i < level.points.Count - 1; i++)
+            _track = new GameObject("Track", typeof(MeshFilter), typeof(MeshRenderer), typeof(MeshCollider));
+            _track.layer = MinimapLayer;
+            _track.transform.SetParent(_planet != null ? _planet.transform.parent : null, true);
+            _track.GetComponent<MeshFilter>().sharedMesh = mesh;
+            var mc = _track.GetComponent<MeshCollider>();
+            mc.sharedMesh = mesh;
+
+            var rend = _track.GetComponent<MeshRenderer>();
+            // Simple asphalt-grey material for now. Could become a Dio/Track shader later.
+            var trackShader = Shader.Find("Standard");
+            var mat = trackShader != null ? new Material(trackShader) : null;
+            if (mat != null)
             {
-                Vector3 a = level.points[i].directionFromCenter.normalized;
-                Vector3 b = level.points[i + 1].directionFromCenter.normalized;
-                Vector3[] arc = GeodesicUtil.Geodesic(a, b, level.planetRadius + 0.05f, segPerArc);
-                if (i > 0 && pts.Count > 0) pts.RemoveAt(pts.Count - 1);
-                pts.AddRange(arc);
+                mat.name = "TrackAsphalt (runtime)";
+                mat.color = new Color(0.18f, 0.18f, 0.20f, 1f);
+                rend.sharedMaterial = mat;
             }
-            _trackLine.positionCount = pts.Count;
-            _trackLine.SetPositions(pts.ToArray());
+
+            CurrentTrack = _track;
         }
 
         void AttachCameraTo(Transform target)
