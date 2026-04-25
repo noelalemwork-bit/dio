@@ -57,6 +57,17 @@ These are vendored or fetched but **not committed**, so a fresh clone won't have
 - **Solo testing**: just click *Host Game* then *Start Race*. The host's `minPlayers = 1` + `soloBypass = true` lets you race alone.
 - **Two clients**: build a standalone (`File → Build Settings → Build`), run host in editor, run the standalone, click *Join Game* on the standalone — the host appears in the LAN browser via `Mirror.Discovery`.
 
+### Troubleshooting: `OnOpenAsset` signature error from Timeline
+
+If the Console shows:
+
+```
+UnityEditor.Timeline.TimelineWindow:OnOpenAsset (UnityEngine.EntityId,int) does not
+match any of [OnOpenAssetAttribute] expected signatures.
+```
+
+This is a Unity 6 / Timeline package mismatch — Timeline's `OnOpenAsset` method takes the new `EntityId` type but the editor's `[OnOpenAsset]` validator only recognises the older `Int32` signatures. **Dio doesn't use Timeline.** Easiest fix: open `Packages/manifest.json` and delete the `"com.unity.timeline": "..."` line. Unity will refresh the package list and the error stops.
+
 ### Troubleshooting: "I can't see hosted games on my LAN"
 
 LAN discovery uses UDP broadcast on port `47777`. If clients see an empty list:
