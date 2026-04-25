@@ -95,3 +95,9 @@ Assets/Dio/Prefabs/
 Assets/Dio/Prefabs.meta
 Assets/Dio/Scenes/Main.unity
 Assets/Dio/Scenes/Main.unity.meta
+
+# Local agent/editor state and Unity recovery artifacts
+.agents/
+.vsconfig
+Assets/_Recovery/
+Assets/_Recovery.meta
