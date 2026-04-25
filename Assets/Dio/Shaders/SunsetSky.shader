@@ -26,6 +26,9 @@ Shader "Dio/SunsetSky"
         _CloudDensity  ("Cloud Strength", Range(0, 1)) = 0.85
     }
 
+    // Skybox shaders only need vertex transform + per-pixel direction. Using the
+    // legacy `UnityCG.cginc` keeps us compatible with both URP and Built-in
+    // without needing pipeline-specific shader libraries.
     SubShader
     {
         Tags
@@ -33,38 +36,34 @@ Shader "Dio/SunsetSky"
             "RenderType"="Background"
             "Queue"="Background"
             "PreviewType"="Skybox"
-            "RenderPipeline"="UniversalPipeline"
         }
         Cull Off ZWrite Off
 
         Pass
         {
-            HLSLPROGRAM
+            CGPROGRAM
             #pragma vertex vert
             #pragma fragment frag
+            #include "UnityCG.cginc"
 
-            #include "Packages/com.unity.render-pipelines.universal/ShaderLibrary/Core.hlsl"
+            struct appdata { float4 vertex : POSITION; };
+            struct v2f     { float4 vertex : SV_POSITION; float3 dir : TEXCOORD0; };
 
-            struct Attributes { float4 positionOS : POSITION; };
-            struct Varyings   { float4 positionCS : SV_POSITION; float3 dir : TEXCOORD0; };
-
-            CBUFFER_START(UnityPerMaterial)
-                float4 _ColorBottom;
-                float4 _ColorMid;
-                float4 _ColorTop;
-                float  _MidPoint;
-                float4 _PlayerUp;
-                float4 _SunDir;
-                float4 _SunColor;
-                float  _SunSize;
-                float  _SunHaloPower;
-                float4 _CloudColor;
-                float4 _CloudShadow;
-                float  _CloudCoverage;
-                float  _CloudScale;
-                float  _CloudSpeed;
-                float  _CloudDensity;
-            CBUFFER_END
+            float4 _ColorBottom;
+            float4 _ColorMid;
+            float4 _ColorTop;
+            float  _MidPoint;
+            float4 _PlayerUp;
+            float4 _SunDir;
+            float4 _SunColor;
+            float  _SunSize;
+            float  _SunHaloPower;
+            float4 _CloudColor;
+            float4 _CloudShadow;
+            float  _CloudCoverage;
+            float  _CloudScale;
+            float  _CloudSpeed;
+            float  _CloudDensity;
 
             // Hash + 3D value noise + fbm. Cheap, no textures.
             float hash13(float3 p)
@@ -91,7 +90,7 @@ Shader "Dio/SunsetSky"
             {
                 float v = 0.0;
                 float a = 0.5;
-                [unroll] for (int i = 0; i < 5; i++)
+                for (int i = 0; i < 5; i++)
                 {
                     v += a * vnoise(p);
                     p = p * 2.02 + 19.19;
@@ -100,15 +99,15 @@ Shader "Dio/SunsetSky"
                 return v;
             }
 
-            Varyings vert(Attributes IN)
+            v2f vert(appdata IN)
             {
-                Varyings OUT;
-                OUT.positionCS = TransformObjectToHClip(IN.positionOS.xyz);
-                OUT.dir = IN.positionOS.xyz;
+                v2f OUT;
+                OUT.vertex = UnityObjectToClipPos(IN.vertex);
+                OUT.dir = IN.vertex.xyz;
                 return OUT;
             }
 
-            half4 frag(Varyings IN) : SV_Target
+            half4 frag(v2f IN) : SV_Target
             {
                 float3 dir = normalize(IN.dir);
 
@@ -121,14 +120,14 @@ Shader "Dio/SunsetSky"
                 up = normalize(up);
                 float upDot = dot(dir, up);
 
-                // Three-stop gradient. upDot in [-1..1] → h in [0..1].
+                // Three-stop gradient. upDot in [-1..1] -> h in [0..1].
                 float h = saturate(upDot * 0.5 + 0.5);
                 float lo = smoothstep(0.0, _MidPoint, h);
                 float hi = smoothstep(_MidPoint, 1.0, h);
                 half3 sky = lerp(_ColorBottom.rgb, _ColorMid.rgb, lo);
                 sky = lerp(sky, _ColorTop.rgb, hi);
 
-                // Sun disc + soft halo. Sun is a fixed world-space direction —
+                // Sun disc + soft halo. Sun is a fixed world-space direction --
                 // it appears in different parts of the player's sky depending on
                 // where they are on the planet, which is the desired behaviour.
                 float3 sunDir = normalize(_SunDir.xyz);
@@ -137,10 +136,9 @@ Shader "Dio/SunsetSky"
                 float halo = pow(sunDot, _SunHaloPower) * 0.55;
                 sky += _SunColor.rgb * (disc + halo);
 
-                // Clouds — sample fbm in 3D *direction* space rather than projecting
+                // Clouds -- sample fbm in 3D *direction* space rather than projecting
                 // onto a horizontal plane. World-stable, no singularity at the
                 // pole, no basis-flip glitches when the player crosses an axis.
-                // Fade out near the player's horizon.
                 float skyMask = smoothstep(0.0, 0.18, upDot);
                 float3 cloudPos = dir * _CloudScale;
                 cloudPos += float3(_Time.y * _CloudSpeed, _Time.y * _CloudSpeed * 0.6, 0);
@@ -156,7 +154,7 @@ Shader "Dio/SunsetSky"
 
                 return half4(sky, 1);
             }
-            ENDHLSL
+            ENDCG
         }
     }
 
