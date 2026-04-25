@@ -46,6 +46,9 @@ namespace Dio.Level.Obstacles
 
         void Update()
         {
+            // Server is authoritative; clients receive the position via NetworkTransform.
+            if (!isServer) return;
+
             float t = (float)(NetworkTime.time - startServerTime);
             float ang = t * angularSpeed;
             Vector3 offset = (tangentBasis * Mathf.Cos(ang) + binormalBasis * Mathf.Sin(ang)) * orbitRadius;

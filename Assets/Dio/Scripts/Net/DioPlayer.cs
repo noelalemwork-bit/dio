@@ -9,9 +9,12 @@ namespace Dio.Net
     {
         public const int MaxNameLength = 16;
 
-        [SyncVar(hook = nameof(OnAnyChanged))] public string playerName = "Player";
-        [SyncVar(hook = nameof(OnAnyChanged))] public int colorIndex = 0;
-        [SyncVar(hook = nameof(OnAnyChanged))] public bool ready = false;
+        // Mirror's weaver requires the hook signature to match the SyncVar's
+        // concrete type exactly — no generics. So we have one hook per field
+        // and they all forward to NotifyRosterChanged.
+        [SyncVar(hook = nameof(OnNameChanged))]   public string playerName = "Player";
+        [SyncVar(hook = nameof(OnColorChanged))]  public int colorIndex = 0;
+        [SyncVar(hook = nameof(OnReadyChanged))]  public bool ready = false;
 
         public static System.Action OnRosterChanged;
 
@@ -21,10 +24,14 @@ namespace Dio.Net
             playerName = $"Player {connectionToClient.connectionId}";
         }
 
-        public override void OnStartClient() { OnRosterChanged?.Invoke(); }
-        public override void OnStopClient() { OnRosterChanged?.Invoke(); }
+        public override void OnStartClient() { NotifyRosterChanged(); }
+        public override void OnStopClient() { NotifyRosterChanged(); }
 
-        void OnAnyChanged<T>(T _, T __) { OnRosterChanged?.Invoke(); }
+        void OnNameChanged(string _, string __) => NotifyRosterChanged();
+        void OnColorChanged(int _, int __) => NotifyRosterChanged();
+        void OnReadyChanged(bool _, bool __) => NotifyRosterChanged();
+
+        static void NotifyRosterChanged() => OnRosterChanged?.Invoke();
 
         [Command]
         public void CmdSetName(string newName)

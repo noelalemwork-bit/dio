@@ -111,7 +111,7 @@ namespace Dio.UI.EditorTools
             BuildPlayerPrefab();
             var netMgrPrefab = BuildNetworkManagerPrefab();
 
-            var scene = EditorSceneManager.NewScene(NewSceneSetup.EmptyScene, NewSceneSetupMode.Single);
+            var scene = EditorSceneManager.NewScene(NewSceneSetup.EmptyScene, NewSceneMode.Single);
 
             // Camera + EventSystem.
             var camGo = new GameObject("Main Camera", typeof(Camera), typeof(AudioListener));

@@ -36,6 +36,18 @@ namespace Dio.Level.Obstacles
             if (lifetime > 0f) Invoke(nameof(ServerDespawn), lifetime);
         }
 
+        public override void OnStartClient()
+        {
+            // On non-server peers, freeze the rigidbody so NetworkTransform is
+            // the only thing moving us. Otherwise client-side physics fights
+            // the snapshot interpolation.
+            if (!isServer)
+            {
+                var rb = GetComponent<Rigidbody>();
+                if (rb != null) rb.isKinematic = true;
+            }
+        }
+
         protected bool IsOwnerImmune(DioCar car)
         {
             if (car == null || car.connectionToClient == null) return false;
