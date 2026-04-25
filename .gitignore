@@ -113,4 +113,7 @@ Packages/*/
 
 # Local Unity machine/version settings
 Assets/Settings/UniversalRenderPipelineGlobalSettings.asset
+Assets/UniversalRenderPipelineGlobalSettings.asset
+Assets/DefaultVolumeProfile.asset
+Assets/Resources/BillingMode.json
 ProjectSettings/ProjectVersion.txt
