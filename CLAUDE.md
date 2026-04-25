@@ -55,12 +55,18 @@ The full audit is in [plan.md §11](./plan.md). Quick summary of fixed items:
 
 These are the ones the user wants you to investigate with the MCPs:
 
-1. **Joined-player physics still felt frozen on their screen** in earlier tests. Latest fix is the strict kinematic config in `DioCar.OnStartClient`. Verify with the user that it works. If it doesn't:
-   - Use `mirror-docs` to query: "For a kinematic client receiving server-authoritative NetworkTransform updates, what Rigidbody settings does Mirror recommend? Is NetworkRigidbody preferred?"
-   - Use `unity-mcp` to inspect a running joined client's `DioCar` GameObject during a race: confirm `Rigidbody.isKinematic == true`, `NetworkIdentity.connectionToClient` matches, `transform.position` is changing.
-2. **LAN auto-discovery over Cloudflare WARP** — multi-adapter broadcast is in `DioNetworkDiscovery.MultiAdapterBroadcast`. Verify `[Dio Discovery] server got ping from …` shows in the host's console when a client clicks *Join Game*. If not, the broadcast isn't reaching the host. Use `unity-mcp` to grep the console.
-3. **Lap detection / proper race position** — currently the position panel + win condition use **closest-distance to finish** as a stand-in. Real implementation is M2 (arc-length-along-track tracker). Don't ship without telling the user.
-4. **Predicted rigidbody for the local player** (input-lag fix) — Mirror has `PredictedRigidbody` example at `Assets/Mirror/Examples/BilliardsPredicted/`. M3 milestone in plan.md.
+1. **Joined-player physics still felt frozen on their screen** in earlier tests. Strict kinematic config in `DioCar.OnStartClient`, plus the new World-coords + every-tick streaming setup on `NetworkTransformReliable` (configured by `Dio.Net.EditorTools.NetworkTransformConfigurer`), should fix this. To verify under suspicion:
+   - `mirror-docs`: "For a kinematic client receiving server-authoritative NetworkTransform updates, what Rigidbody settings does Mirror recommend? Is NetworkRigidbody preferred?"
+   - `unity-mcp`: inspect a running joined client's `DioCar` GameObject during a race — confirm `Rigidbody.isKinematic == true`, `NetworkIdentity.connectionToClient` matches, `transform.position` is changing.
+2. **LAN auto-discovery over Cloudflare WARP** — multi-adapter broadcast in `DioNetworkDiscovery.MultiAdapterBroadcast`. Verify `[Dio Discovery] server got ping from …` shows in the host's console when a client clicks *Join Game*.
+3. **Predicted rigidbody for the local player** (input-lag fix) — Mirror's `PredictedRigidbody` lives at `Assets/Mirror/Components/PredictedRigidbody/`. Open question whether it composes with `WheelCollider` (Mirror's prediction skips `Physics.Simulate()`). M3.
+
+## What changed in this session (latest)
+
+- **NetworkTransformReliable tuning**: world coords, no `onlySyncOnChange`, every-tick streaming, 5 mm position precision on cars / 1 cm on obstacles. Centralised in [Assets/Dio/Scripts/Net/Editor/NetworkTransformConfigurer.cs](Assets/Dio/Scripts/Net/Editor/NetworkTransformConfigurer.cs); both prefab builders call it.
+- **60 Hz everywhere**: `Time.fixedDeltaTime = 1/60`, `NetworkManager.sendRate = 60`, `DioCar.inputSendRate = 60` — server sim, snapshot stream, and client input upload all share the same timeline.
+- **Arc-length tracker**: `TrackBuilder.ArcLengthOf(level, worldPos, planetCenter)` projects a car onto the geodesic chain. `DioNetworkManager` writes `DioCar.progressArc` (new SyncVar) per tick; win detection uses arc-length, position panel sorts by it.
+- **Ping HUD**: `RaceHUD.pingLabel` shows live `NetworkTime.rtt` with green/amber/red colour bands.
 
 ## How to use the MCPs efficiently
 

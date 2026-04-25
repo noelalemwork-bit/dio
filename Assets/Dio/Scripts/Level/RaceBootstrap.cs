@@ -16,7 +16,8 @@ namespace Dio.Level
         public static GameObject CurrentPlanet { get; private set; }
 
         /// The active LevelData for the running race. Used by the HUD's position
-        /// tracker (closest-to-finish proxy until M2 lands the real arc-length tracker).
+        /// tracker and by `TrackBuilder.ArcLengthOf` to project car positions
+        /// onto the geodesic chain.
         public static LevelData CurrentLevel { get; private set; }
 
         /// The procedural track-strip GameObject built by EnsureTrack. Kept

@@ -39,13 +39,32 @@ namespace Dio.Net
         public static System.Action<RaceWonMessage> OnRaceWon;
 
         bool _raceActive;
-        const float WinDistanceThreshold = 8f;     // unit distance for "crossed the finish"
+        // Crossed the finish when within `FinishArcWindow` meters of the END
+        // of the track's arc length. Smaller than the old WinDistanceThreshold
+        // because arc-length is monotonic — once you reach the end, you're done,
+        // regardless of how wide the track is.
+        const float FinishArcWindow = 4f;
         const float DefaultCleanupDelaySec = 5.5f; // duration of the win screen before cleanup
+        float _totalTrackLength; // cached at race start; updated when level changes
 
         public override void Awake()
         {
             base.Awake();
             if (discovery == null) discovery = GetComponent<DioNetworkDiscovery>();
+
+            // Pin the physics tick to 60 Hz so server-side WheelCollider sim
+            // matches what every client expects from snapshot interpolation.
+            // Unity's default 50 Hz introduces audible "step" jitter on remote
+            // peers when their sendInterval is 60 Hz — the timelines drift.
+            // 60 Hz fixed step + 60 Hz Mirror sendRate + 60 Hz client input
+            // upload means inputs, sim, and snapshots are all on one timeline.
+            Time.fixedDeltaTime = 1f / 60f;
+            Time.maximumDeltaTime = 0.1f; // safety: don't over-step on hitches
+
+            // Mirror's NetworkManager exposes `sendRate` (Hz). Pin it
+            // explicitly so a future package update doesn't quietly change
+            // the default and re-introduce jitter.
+            sendRate = 60;
         }
 
         public override void OnStartServer()
@@ -144,6 +163,7 @@ namespace Dio.Net
             // is triggered via OnRaceStarted, which fires from the message handler.
             ServerSpawnCarsForAllPlayers();
             ServerSpawnMidTrackPowerups();
+            _totalTrackLength = Dio.Level.TrackBuilder.TotalArcLength(defaultLevel);
             _raceActive = true;
 
             // Tell every client (host's local client included).
@@ -324,23 +344,27 @@ namespace Dio.Net
 
         // ----- server-side win detection + cleanup -----
 
-        void Update()
+        public override void Update()
         {
+            base.Update();
             if (!NetworkServer.active || !_raceActive) return;
             if (defaultLevel == null || !defaultLevel.HasMinimum) return;
+            if (_totalTrackLength <= 0.01f) return;
 
-            // Distance proxy for "crossed the finish line" until the M2
-            // arc-length-along-track tracker lands.
-            Vector3 finishWorld = defaultLevel.Finish.directionFromCenter.normalized * defaultLevel.planetRadius;
             var planet = Dio.Level.RaceBootstrap.CurrentPlanet;
-            if (planet != null) finishWorld += planet.transform.position;
+            Vector3 planetCenter = planet != null ? planet.transform.position : Vector3.zero;
+            float finishArc = _totalTrackLength;
 
             foreach (var ni in NetworkServer.spawned.Values)
             {
                 var car = ni != null ? ni.GetComponent<DioCar>() : null;
                 if (car == null) continue;
-                if ((car.transform.position - finishWorld).sqrMagnitude > WinDistanceThreshold * WinDistanceThreshold)
-                    continue;
+
+                float arc = Dio.Level.TrackBuilder.ArcLengthOf(defaultLevel, car.transform.position, planetCenter);
+                // Publish so HUDs / minimap markers can show race position.
+                car.progressArc = arc;
+
+                if (arc < finishArc - FinishArcWindow) continue;
 
                 // Crossed the finish — winner is the connection that owns this car.
                 DioPlayer winnerPlayer = null;

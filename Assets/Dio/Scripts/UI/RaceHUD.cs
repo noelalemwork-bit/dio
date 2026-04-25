@@ -45,6 +45,11 @@ namespace Dio.UI
         public int positionTopN = 4;
         public float positionUpdateInterval = 0.4f;
 
+        [Header("Net diagnostics")]
+        [Tooltip("Optional. Shows live RTT in ms + connection quality. Hidden when null.")]
+        public TMP_Text pingLabel;
+        public float pingUpdateInterval = 0.5f;
+
         [Header("Pickup banner (shown briefly when a powerup is grabbed)")]
         public CanvasGroup pickupBannerGroup;
         public Image pickupBannerIcon;
@@ -61,6 +66,7 @@ namespace Dio.UI
         int _lastCharges = -1;
 
         float _nextPositionUpdate;
+        float _nextPingUpdate;
         readonly System.Text.StringBuilder _positionSb = new System.Text.StringBuilder(128);
         readonly List<(string name, float dist, bool isMe)> _scratchEntries = new List<(string, float, bool)>(8);
 
@@ -97,6 +103,29 @@ namespace Dio.UI
             if (_localController != null) RefreshSpeed();
             RefreshPositions();
             RefreshPickupBanner();
+            RefreshPing();
+        }
+
+        // Live RTT readout for the local client. Hosts always show 0ms because
+        // their NetworkTime.rtt is local-loopback. Color-codes the text to give
+        // a quick "is this game playable?" glance: green ≤80, amber ≤180, red >180.
+        void RefreshPing()
+        {
+            if (pingLabel == null) return;
+            if (Time.unscaledTime < _nextPingUpdate) return;
+            _nextPingUpdate = Time.unscaledTime + pingUpdateInterval;
+
+            if (!NetworkClient.active)
+            {
+                pingLabel.text = "";
+                return;
+            }
+            int ms = Mathf.RoundToInt((float)(NetworkTime.rtt * 1000.0));
+            Color c = ms <= 80 ? new Color(0.55f, 0.95f, 0.55f)
+                    : ms <= 180 ? new Color(1f, 0.85f, 0.40f)
+                                : new Color(0.95f, 0.45f, 0.40f);
+            pingLabel.color = c;
+            pingLabel.text = $"{ms} ms";
         }
 
         void RefreshPickupBanner()
@@ -138,8 +167,10 @@ namespace Dio.UI
             pickupBannerGroup.alpha = 1f;
         }
 
-        // Closest-to-finish proxy for race position. Replaced by a real
-        // arc-length-along-track tracker once procedural track meshes land (M2).
+        // Race position uses the server-published `progressArc` SyncVar
+        // (arc-length traveled along the geodesic chain). Highest progress
+        // wins, so we sort descending. Server is the only writer — clients
+        // just read the synced value, so every peer agrees on the order.
         void RefreshPositions()
         {
             if (positionLabel == null) return;
@@ -149,20 +180,17 @@ namespace Dio.UI
             var level = Dio.Level.RaceBootstrap.CurrentLevel;
             if (level == null || !level.HasMinimum) return;
 
-            Vector3 finishWorld = level.Finish.directionFromCenter.normalized * level.planetRadius;
-            var planet = Dio.Level.RaceBootstrap.CurrentPlanet;
-            if (planet != null) finishWorld += planet.transform.position;
-
             _scratchEntries.Clear();
             foreach (var ni in NetworkClient.spawned.Values)
             {
                 var car = ni != null ? ni.GetComponent<DioCar>() : null;
                 if (car == null) continue;
-                float dist = (car.transform.position - finishWorld).magnitude;
                 string name = string.IsNullOrEmpty(car.ownerName) ? "Player" : car.ownerName;
-                _scratchEntries.Add((name, dist, car.isOwned));
+                _scratchEntries.Add((name, car.progressArc, car.isOwned));
             }
-            _scratchEntries.Sort((a, b) => a.dist.CompareTo(b.dist));
+            // Negate the distance value so the existing ascending sort puts
+            // the highest progress first (1st place).
+            _scratchEntries.Sort((a, b) => b.dist.CompareTo(a.dist));
 
             _positionSb.Clear();
             int max = Mathf.Min(_scratchEntries.Count, positionTopN);

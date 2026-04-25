@@ -159,7 +159,7 @@ namespace Dio.Powerups.EditorTools
             }
 
             go.AddComponent<NetworkIdentity>();
-            AddNetworkTransform(go);
+            Dio.Net.EditorTools.NetworkTransformConfigurer.Configure(go, fastCar:false);
             go.AddComponent<PowerupBox>();
             go.AddComponent<Dio.Common.SpinningProp>();
             AddLabel(go.transform, "?", 1.7f);
@@ -170,7 +170,7 @@ namespace Dio.Powerups.EditorTools
         {
             var go = NewSphere("Banana", new Color(0.95f, 0.85f, 0.25f, 1f), 0.6f, true);
             go.AddComponent<NetworkIdentity>();
-            AddNetworkTransform(go);
+            Dio.Net.EditorTools.NetworkTransformConfigurer.Configure(go, fastCar:false);
             go.AddComponent<BananaObstacle>();
             AddLabel(go.transform, "Banana", 1.0f);
             return SaveAndDestroy(go, "Banana");
@@ -190,7 +190,7 @@ namespace Dio.Powerups.EditorTools
             box.isTrigger = true;
             box.size = new Vector3(2f, 0.5f, 2f);
             go.AddComponent<NetworkIdentity>();
-            AddNetworkTransform(go);
+            Dio.Net.EditorTools.NetworkTransformConfigurer.Configure(go, fastCar:false);
             var ob = go.AddComponent<OilSlickObstacle>();
             ob.lifetime = 8f;
             AddLabel(go.transform, "Oil", 1.5f);
@@ -205,7 +205,7 @@ namespace Dio.Powerups.EditorTools
             rb.mass = 5f;
             rb.linearDamping = 0.2f;
             go.AddComponent<NetworkIdentity>();
-            AddNetworkTransform(go);
+            Dio.Net.EditorTools.NetworkTransformConfigurer.Configure(go, fastCar:false);
             go.AddComponent<GreenShellObstacle>();
             AddLabel(go.transform, "Green", 1.0f);
             return SaveAndDestroy(go, "GreenShell");
@@ -221,7 +221,7 @@ namespace Dio.Powerups.EditorTools
             trigger.isTrigger = true;
             trigger.radius = 0.5f;
             go.AddComponent<NetworkIdentity>();
-            AddNetworkTransform(go);
+            Dio.Net.EditorTools.NetworkTransformConfigurer.Configure(go, fastCar:false);
             go.AddComponent<BlueShellObstacle>();
             AddLabel(go.transform, "Blue", 1.5f);
             return SaveAndDestroy(go, "BlueShell");
@@ -234,7 +234,7 @@ namespace Dio.Powerups.EditorTools
             rb.useGravity = false;
             rb.mass = 8f;
             go.AddComponent<NetworkIdentity>();
-            AddNetworkTransform(go);
+            Dio.Net.EditorTools.NetworkTransformConfigurer.Configure(go, fastCar:false);
             go.AddComponent<BobombObstacle>();
             AddLabel(go.transform, "Bomb", 1.0f);
             return SaveAndDestroy(go, "Bobomb");
@@ -251,7 +251,7 @@ namespace Dio.Powerups.EditorTools
             // Convert to trigger.
             col.isTrigger = true;
             go.AddComponent<NetworkIdentity>();
-            AddNetworkTransform(go);
+            Dio.Net.EditorTools.NetworkTransformConfigurer.Configure(go, fastCar:false);
             var t = go.AddComponent<TornadoObstacle>();
             t.lifetime = 10f;
             t.orbitRadius = 30f;
@@ -260,13 +260,6 @@ namespace Dio.Powerups.EditorTools
             return SaveAndDestroy(go, "Tornado");
         }
 
-        static Component AddNetworkTransform(GameObject go)
-        {
-            var ntype = System.Type.GetType("Mirror.NetworkTransformReliable, Mirror.Components")
-                     ?? System.Type.GetType("Mirror.NetworkTransformUnreliable, Mirror.Components")
-                     ?? System.Type.GetType("Mirror.NetworkTransform, Mirror.Components");
-            return ntype != null ? go.AddComponent(ntype) : null;
-        }
     }
 
 }

@@ -26,8 +26,14 @@ namespace Dio.Player
         // physics (which doesn't simulate on a kinematic rb).
         [SyncVar] public float steerAngle;
 
-        [Tooltip("How often the local player sends its inputs to the server (Hz).")]
-        public float inputSendRate = 30f;
+        // Server-set during DioNetworkManager.Update (the win-condition pass);
+        // arc-length the car has traveled along the track in world units. Used
+        // by the HUD position panel + minimap so every peer sees the same
+        // ranking without recomputing arc-length on the client.
+        [SyncVar] public float progressArc;
+
+        [Tooltip("How often the local player sends its inputs to the server (Hz). 60 matches the physics tick + Mirror sendRate so every tick gets fresh input.")]
+        public float inputSendRate = 60f;
 
         ArcadeCarController _car;
         Rigidbody _rb;

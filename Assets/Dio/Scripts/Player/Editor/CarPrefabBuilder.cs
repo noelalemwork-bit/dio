@@ -62,11 +62,13 @@ namespace Dio.Player.EditorTools
 
             // -- Mirror identity + transform sync --
             root.AddComponent<NetworkIdentity>();
-            var ntype = System.Type.GetType("Mirror.NetworkTransformReliable, Mirror.Components")
-                     ?? System.Type.GetType("Mirror.NetworkTransformUnreliable, Mirror.Components")
-                     ?? System.Type.GetType("Mirror.NetworkTransform, Mirror.Components");
-            if (ntype != null) root.AddComponent(ntype);
-            else Debug.LogWarning("[Dio] No NetworkTransform variant found — install Mirror.Components.");
+            // World-space + every-tick streaming + tight precision = best
+            // smoothness for fast-moving cars. See plan.md and Mirror docs:
+            // https://mirror-networking.gitbook.io/docs/manual/components/network-transform
+            // For racing, onlySyncOnChange=false avoids restart-stutter from
+            // quantization gaps; world coords avoid drift if the car is ever
+            // reparented (e.g. to a moving platform).
+            Dio.Net.EditorTools.NetworkTransformConfigurer.Configure(root, fastCar:true);
 
             // -- Dio components --
             var grav = root.AddComponent<SphericalGravity>();

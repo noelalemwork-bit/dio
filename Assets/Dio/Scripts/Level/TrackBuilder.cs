@@ -117,6 +117,89 @@ namespace Dio.Level
             return Vector3.Slerp(a, b, local).normalized * level.planetRadius;
         }
 
+        /// Total geodesic arc length of the chain in world units, summed
+        /// over every consecutive pair of points.
+        public static float TotalArcLength(LevelData level)
+        {
+            if (level == null || !level.HasMinimum) return 0f;
+            float r = level.planetRadius;
+            float sum = 0f;
+            for (int i = 0; i < level.points.Count - 1; i++)
+            {
+                Vector3 a = level.points[i].directionFromCenter.normalized;
+                Vector3 b = level.points[i + 1].directionFromCenter.normalized;
+                sum += GeodesicUtil.ArcLength(a, b, r);
+            }
+            return sum;
+        }
+
+        /// Project a world-space point onto the geodesic chain. Returns the
+        /// arc-length traveled along the chain to the projected point, in
+        /// world units. The point is first projected onto the unit sphere
+        /// (via direction.normalized — works whether the player is slightly
+        /// above or below the surface). Used by the lap / finish tracker:
+        /// progress monotonically increases from 0 (start) to TotalArcLength
+        /// (finish), making "who's ahead" and "did we cross the line"
+        /// straightforward and order-preserving even on sharp turns.
+        ///
+        /// `planetCenter`: the world-space position of the planet origin —
+        /// usually `RaceBootstrap.CurrentPlanet.transform.position`, but
+        /// callers can pass `Vector3.zero` if the planet is at the origin
+        /// (which is the default for the M1 setup).
+        public static float ArcLengthOf(LevelData level, Vector3 worldPos, Vector3 planetCenter)
+        {
+            if (level == null || !level.HasMinimum) return 0f;
+
+            Vector3 dir = (worldPos - planetCenter).normalized;
+            if (dir.sqrMagnitude < 1e-6f) return 0f;
+
+            float r = level.planetRadius;
+            float bestArc = 0f;
+            float bestPerpAngle = float.MaxValue;
+            float arcCursor = 0f;
+
+            for (int i = 0; i < level.points.Count - 1; i++)
+            {
+                Vector3 a = level.points[i].directionFromCenter.normalized;
+                Vector3 b = level.points[i + 1].directionFromCenter.normalized;
+
+                Vector3 axis = Vector3.Cross(a, b);
+                if (axis.sqrMagnitude < 1e-8f) { arcCursor += GeodesicUtil.ArcLength(a, b, r); continue; }
+                axis.Normalize();
+
+                // Project dir onto the great-circle plane (the plane through
+                // origin with normal `axis`).
+                Vector3 projected = (dir - Vector3.Dot(dir, axis) * axis).normalized;
+
+                // Signed angle from a to projection around `axis`. Positive =
+                // toward b, negative = before a.
+                float dotAB = Mathf.Clamp(Vector3.Dot(a, b), -1f, 1f);
+                float segAngle = Mathf.Acos(dotAB);
+
+                float dotAP = Mathf.Clamp(Vector3.Dot(a, projected), -1f, 1f);
+                float angleFromA = Mathf.Acos(dotAP);
+                // Sign: cross(a, projected) aligned with axis means we're going forward.
+                if (Vector3.Dot(Vector3.Cross(a, projected), axis) < 0f) angleFromA = -angleFromA;
+
+                float clamped = Mathf.Clamp(angleFromA, 0f, segAngle);
+
+                // Perpendicular angular distance from the great-circle plane —
+                // smaller = closer to this segment's line. Prefer the segment
+                // we're nearest, ties broken by lowest-index segment (so the
+                // start of the chain wins when overlapping).
+                float perp = Mathf.Abs(Mathf.Asin(Mathf.Clamp(Vector3.Dot(dir, axis), -1f, 1f)));
+                if (perp < bestPerpAngle - 1e-4f)
+                {
+                    bestPerpAngle = perp;
+                    bestArc = arcCursor + clamped * r;
+                }
+
+                arcCursor += segAngle * r;
+            }
+
+            return Mathf.Clamp(bestArc, 0f, arcCursor);
+        }
+
         /// Tangent direction at parametric t — used to orient powerup boxes
         /// along the track and lay them out perpendicular to it.
         public static Vector3 TangentAt(LevelData level, float t)

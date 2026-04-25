@@ -688,6 +688,25 @@ namespace Dio.UI.EditorTools
             posList.font = TMP_Settings.defaultFontAsset;
             posList.lineSpacing = 4f;
 
+            // Ping readout — pinned just under the position panel. Shows live
+            // RTT + colour-codes for connection quality. Stays empty on the
+            // host (their RTT is loopback-near-zero anyway).
+            var pingGo = new GameObject("Ping", typeof(RectTransform));
+            pingGo.transform.SetParent(hudRoot.transform, false);
+            var pingRt = (RectTransform)pingGo.transform;
+            pingRt.anchorMin = new Vector2(1, 1); pingRt.anchorMax = new Vector2(1, 1);
+            pingRt.pivot = new Vector2(1, 1);
+            pingRt.anchoredPosition = new Vector2(-24, -212);
+            pingRt.sizeDelta = new Vector2(280, 36);
+            var pingText = pingGo.AddComponent<TextMeshProUGUI>();
+            pingText.text = "";
+            pingText.fontSize = 22;
+            pingText.fontStyle = FontStyles.Bold;
+            pingText.alignment = TextAlignmentOptions.MidlineRight;
+            pingText.font = TMP_Settings.defaultFontAsset;
+            pingText.color = Color.white;
+            pingText.raycastTarget = false;
+
             // ---- Win panel (siblings the menu/hud roots; sits ON TOP of both) ----
             // Independent of menuRoot/hudRoot because the win UI replaces both
             // for ~5 seconds before the lobby is restored.
@@ -749,6 +768,7 @@ namespace Dio.UI.EditorTools
             hudCtrl.speedLabel = speedText;
             hudCtrl.speedNeedle = needleRt;
             hudCtrl.positionLabel = posList;
+            hudCtrl.pingLabel = pingText;
             hudCtrl.pickupBannerGroup = bannerCg;
             hudCtrl.pickupBannerIcon = bannerIcon;
             hudCtrl.pickupBannerLabel = bannerLabel;
