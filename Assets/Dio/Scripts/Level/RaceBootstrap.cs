@@ -39,6 +39,7 @@ namespace Dio.Level
         GameObject _planet;
         GameObject _track;
         GameObject _guards;
+        GameObject _spawnPad;
         Camera _cam;
 
         void Awake()
@@ -68,6 +69,7 @@ namespace Dio.Level
         // touch them here.
         public void CleanupLocalScene()
         {
+            if (_spawnPad != null) { Destroy(_spawnPad); _spawnPad = null; }
             if (_guards != null) { Destroy(_guards); _guards = null; }
             if (_track != null) { Destroy(_track); _track = null; }
             if (_planet != null) { Destroy(_planet); _planet = null; }
@@ -120,6 +122,54 @@ namespace Dio.Level
             EnsurePlanet(level.planetRadius);
             EnsureTrack(level);
             EnsureGuards(level);
+            EnsureSpawnPad(level);
+        }
+
+        // Short straight ribbon behind the start line + a back wall, so cars
+        // initially placed at slot N (for N > 0, rows behind the front row)
+        // have actual track under them and can't reverse off the edge of the
+        // world. Length scales with the number of starting columns; we pick
+        // a comfortable buffer (10m + per-row spacing) regardless of player
+        // count, so even solo races get a back wall.
+        void EnsureSpawnPad(Dio.Level.LevelData level)
+        {
+            if (_spawnPad != null) Destroy(_spawnPad);
+            const float backBuffer = 12f;
+            const float perRowSpacing = 4.5f;
+            const int worstCaseRows = 4;       // 8 cars / 3 per row → 3 rows; +1 buffer
+            float length = backBuffer + worstCaseRows * perRowSpacing;
+            var (ribbon, wall) = TrackBuilder.BuildSpawnPad(level, length);
+            if (ribbon == null) return;
+
+            _spawnPad = new GameObject("SpawnPad");
+            _spawnPad.transform.SetParent(_planet != null ? _planet.transform.parent : null, true);
+
+            Shader sh = Shader.Find("Standard");
+            var asphalt = sh != null ? new Material(sh) { name = "SpawnPad (runtime)" } : null;
+            if (asphalt != null) asphalt.color = new Color(0.18f, 0.18f, 0.20f, 1f);
+
+            var ribbonGo = new GameObject("Ribbon", typeof(MeshFilter), typeof(MeshRenderer), typeof(MeshCollider));
+            ribbonGo.transform.SetParent(_spawnPad.transform, false);
+            ribbonGo.layer = MinimapLayer;
+            ribbonGo.GetComponent<MeshFilter>().sharedMesh = ribbon;
+            if (asphalt != null) ribbonGo.GetComponent<MeshRenderer>().sharedMaterial = asphalt;
+            var rmc = ribbonGo.GetComponent<MeshCollider>();
+            rmc.sharedMesh = ribbon; rmc.convex = false;
+
+            if (wall != null)
+            {
+                Shader wsh = Shader.Find("Universal Render Pipeline/Lit") ?? Shader.Find("Standard");
+                var wmat = new Material(wsh) { name = "SpawnPadWall (runtime)" };
+                wmat.color = new Color(0.20f, 0.18f, 0.22f, 1f);
+
+                var wallGo = new GameObject("BackWall", typeof(MeshFilter), typeof(MeshRenderer), typeof(MeshCollider));
+                wallGo.transform.SetParent(_spawnPad.transform, false);
+                wallGo.layer = MinimapLayer;
+                wallGo.GetComponent<MeshFilter>().sharedMesh = wall;
+                wallGo.GetComponent<MeshRenderer>().sharedMaterial = wmat;
+                var wmc = wallGo.GetComponent<MeshCollider>();
+                wmc.sharedMesh = wall; wmc.convex = false;
+            }
         }
 
         // Build invisible-but-collidable guard walls along both edges of the
@@ -131,17 +181,32 @@ namespace Dio.Level
         {
             if (_guards != null) Destroy(_guards);
 
-            var (left, right) = TrackBuilder.BuildGuards(level, height: 2.5f, outwardOffset: 0.1f, skirtDepth: 3f);
+            // Z-shape rails. Wall is tall enough to box cars in (≈ 2.2m,
+            // visibly above the chassis but not so high that it blocks
+            // distant scenery / horizon visible past the rail) with a 0.4m
+            // outward lip that catches a car bouncing off the wall before
+            // it can pop over the top. 1m skirt covers the seam to the
+            // low-poly planet collider.
+            var (left, right) = TrackBuilder.BuildGuards(level,
+                wallHeight: 2.2f, lipOutward: 0.4f, skirtDepth: 1f, outwardOffset: 0.05f);
             if (left == null || right == null) return;
 
             _guards = new GameObject("Guards");
             _guards.transform.SetParent(_planet != null ? _planet.transform.parent : null, true);
             _guards.layer = MinimapLayer; // hide from main minimap-isolate camera
 
-            // Subtle dark stripe — readable but not loud.
+            // Subtle dark stripe — readable but not loud. Backface culling
+            // turned off so the rails render from both sides (helpful when
+            // the camera dips behind a rail during the cinematic intro)
+            // and so the rails read as solid walls rather than one-sided
+            // strips when seen from outside the track.
             Shader sh = Shader.Find("Universal Render Pipeline/Lit") ?? Shader.Find("Standard");
             var mat = new Material(sh) { name = "GuardRail (runtime)" };
             mat.color = new Color(0.20f, 0.18f, 0.22f, 1f);
+            // Cull mode 0 = Off in URP/Standard's _Cull property. Set both
+            // names so it works whichever shader Unity resolved to.
+            if (mat.HasProperty("_Cull")) mat.SetFloat("_Cull", 0f);
+            if (mat.HasProperty("_CullMode")) mat.SetFloat("_CullMode", 0f);
 
             BuildGuardChild(_guards.transform, "GuardLeft", left, mat);
             BuildGuardChild(_guards.transform, "GuardRight", right, mat);
@@ -242,6 +307,10 @@ namespace Dio.Level
             rc.car = target.GetComponent<ArcadeCarController>();
             rc.gravity = target.GetComponent<SphericalGravity>();
             rc.mode = RaceCameraMode.Chase;
+            // Match the countdown window in DioNetworkManager.ServerStartRace
+            // (startServerTime = NetworkTime.time + 4.0). Ease the cinematic
+            // pose back to chase exactly as the GO! lands.
+            rc.StartCinematicIntro(duration: 4.0f);
             Debug.Log($"[RaceBootstrap] camera attached to '{target.name}' (local owned car)");
         }
     }

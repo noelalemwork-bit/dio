@@ -4,6 +4,7 @@ using UnityEngine;
 using UnityEngine.UI;
 using TMPro;
 using Dio.Common;
+using Dio.Level;
 using Dio.Net;
 
 namespace Dio.UI
@@ -43,6 +44,10 @@ namespace Dio.UI
         public Button startButton;
         public Button leaveButton;
 
+        [Header("Lobby — level picker")]
+        public Transform levelGridRoot;
+        public GameObject levelCardTemplate;
+
         [Header("Net refs")]
         public DioNetworkManager net;
         public DioNetworkDiscovery discovery;
@@ -63,6 +68,7 @@ namespace Dio.UI
         readonly List<GameObject> _spawnedBrowserRows = new();
         readonly List<GameObject> _spawnedLobbyRows = new();
         readonly List<Button> _swatchButtons = new();
+        readonly List<GameObject> _spawnedLevelCards = new();
 
         DioPlayer LocalPlayer => NetworkClient.localPlayer != null
             ? NetworkClient.localPlayer.GetComponent<DioPlayer>()
@@ -130,31 +136,49 @@ namespace Dio.UI
             // Clear any pre-existing children.
             for (int i = colorSwatchRoot.childCount - 1; i >= 0; i--)
                 Object.Destroy(colorSwatchRoot.GetChild(i).gameObject);
+            _swatchButtons.Clear();
 
             for (int i = 0; i < ColorPalette.Colors.Length; i++)
             {
                 int idx = i;
-                var go = new GameObject($"Swatch_{i}", typeof(RectTransform), typeof(Image), typeof(Button));
+                // Wrapper hosts the spring-scale; the inner image is what
+                // shows the color. Picking grows the wrapper instead of
+                // covering the inner color with a darker rectangle.
+                var go = new GameObject($"Swatch_{i}", typeof(RectTransform), typeof(SpringScale));
                 go.transform.SetParent(colorSwatchRoot, false);
                 var rt = (RectTransform)go.transform;
-                rt.sizeDelta = new Vector2(36, 36);
-                var img = go.GetComponent<Image>();
-                img.color = ColorPalette.Get(i);
-                var btn = go.GetComponent<Button>();
+                rt.sizeDelta = new Vector2(DioStyle.SwatchBase, DioStyle.SwatchBase);
+
+                // Outer ring — colored lighter, sits BEHIND the swatch and
+                // only becomes visible when this swatch is selected (the
+                // inner swatch is slightly smaller so the lighter ring
+                // pokes out around the edge).
+                var ring = new GameObject("LightRing", typeof(RectTransform), typeof(Image));
+                ring.transform.SetParent(go.transform, false);
+                var rrt = (RectTransform)ring.transform;
+                rrt.anchorMin = Vector2.zero; rrt.anchorMax = Vector2.one;
+                rrt.offsetMin = new Vector2(-DioStyle.SwatchOutline, -DioStyle.SwatchOutline);
+                rrt.offsetMax = new Vector2(DioStyle.SwatchOutline, DioStyle.SwatchOutline);
+                var ringImg = ring.GetComponent<Image>();
+                ringImg.color = DioStyle.Lighten(ColorPalette.Get(i), 0.55f);
+                ringImg.raycastTarget = false;
+                ring.SetActive(false);
+
+                // Color disc — the click target, sits in front of the ring.
+                var disc = new GameObject("Disc", typeof(RectTransform), typeof(Image), typeof(Button));
+                disc.transform.SetParent(go.transform, false);
+                var drt = (RectTransform)disc.transform;
+                drt.anchorMin = Vector2.zero; drt.anchorMax = Vector2.one;
+                drt.offsetMin = Vector2.zero; drt.offsetMax = Vector2.zero;
+                var dimg = disc.GetComponent<Image>();
+                dimg.color = ColorPalette.Get(i);
+                var btn = disc.GetComponent<Button>();
                 btn.onClick.AddListener(() => OnColorPicked(idx));
                 _swatchButtons.Add(btn);
 
-                // Tiny outline child to highlight selection.
-                var outline = new GameObject("Outline", typeof(RectTransform), typeof(Image));
-                outline.transform.SetParent(go.transform, false);
-                var ort = (RectTransform)outline.transform;
-                ort.anchorMin = Vector2.zero; ort.anchorMax = Vector2.one;
-                ort.offsetMin = new Vector2(-3, -3); ort.offsetMax = new Vector2(3, 3);
-                var oimg = outline.GetComponent<Image>();
-                oimg.color = new Color(0.1f, 0.1f, 0.1f, 1f);
-                oimg.raycastTarget = false;
-                outline.transform.SetSiblingIndex(0); // behind
-                outline.SetActive(false);
+                // Initial scale snap so the spring doesn't pop on first frame.
+                var spring = go.GetComponent<SpringScale>();
+                spring.Snap(Vector3.one);
             }
         }
 
@@ -162,9 +186,19 @@ namespace Dio.UI
         {
             for (int i = 0; i < _swatchButtons.Count; i++)
             {
-                var t = _swatchButtons[i].transform;
-                var outline = t.Find("Outline");
-                if (outline != null) outline.gameObject.SetActive(i == idx);
+                // Walk up to the wrapper (Disc → Swatch_N).
+                var wrapper = _swatchButtons[i].transform.parent;
+                if (wrapper == null) continue;
+                var ring = wrapper.Find("LightRing");
+                if (ring != null) ring.gameObject.SetActive(i == idx);
+                var spring = wrapper.GetComponent<SpringScale>();
+                if (spring != null)
+                {
+                    float targetScale = (i == idx)
+                        ? DioStyle.SwatchPicked / DioStyle.SwatchBase
+                        : 1f;
+                    spring.SetTargetScale(targetScale);
+                }
             }
         }
 
@@ -309,20 +343,21 @@ namespace Dio.UI
 
             ClearChildren(lobbyListRoot, _spawnedLobbyRows);
 
-            // Build from whichever side we're on.
+            // Snapshot all DioPlayers visible on this peer.
+            var roster = new List<DioPlayer>();
             if (NetworkServer.active && net != null)
             {
-                foreach (var p in net.Players.Values) AddLobbyRow(p);
+                foreach (var p in net.Players.Values) if (p != null) roster.Add(p);
             }
             else if (NetworkClient.isConnected)
             {
-                // On clients we don't have a server roster; iterate spawned identities instead.
                 foreach (var kv in NetworkClient.spawned)
                 {
                     var p = kv.Value != null ? kv.Value.GetComponent<DioPlayer>() : null;
-                    if (p != null) AddLobbyRow(p);
+                    if (p != null) roster.Add(p);
                 }
             }
+            foreach (var p in roster) AddLobbyRow(p);
 
             bool isHost = NetworkServer.active;
             int count = _spawnedLobbyRows.Count;
@@ -331,10 +366,9 @@ namespace Dio.UI
 
             startButton.interactable = isHost && (soloOk || count >= min);
 
-            // Visual: green if interactable (host can start), grey otherwise.
             var img = startButton.GetComponent<Image>();
             if (img != null) img.color = startButton.interactable
-                ? ColorPalette.Get(1)            // green
+                ? DioStyle.Mint
                 : new Color(0.6f, 0.6f, 0.6f, 1f);
 
             var label = startButton.GetComponentInChildren<TMP_Text>();
@@ -346,6 +380,123 @@ namespace Dio.UI
             }
 
             lobbyTitle.text = isHost ? $"Hosting · {count}/{(net != null ? net.maxConnections : 0)}" : "Lobby";
+
+            // Level grid.
+            RefreshLevelGrid(roster, isHost);
+        }
+
+        // ---------- Level picker ----------
+
+        void RefreshLevelGrid(List<DioPlayer> roster, bool isHost)
+        {
+            if (levelGridRoot == null || levelCardTemplate == null) return;
+            if (net == null || net.levelCatalog == null) { ClearChildren(levelGridRoot, _spawnedLevelCards); return; }
+
+            // Identify the host for the authoritative pick.
+            DioPlayer host = null;
+            foreach (var p in roster) if (p != null && p.isLocalPlayer && NetworkServer.active) { host = p; break; }
+            if (host == null)
+            {
+                foreach (var p in roster)
+                {
+                    if (p != null && p.connectionToClient == NetworkServer.localConnection) { host = p; break; }
+                }
+            }
+            int hostPick = host != null ? host.preferredLevelIndex : -1;
+
+            // Bucket players by their preferred level.
+            var votesByLevel = new Dictionary<int, List<DioPlayer>>();
+            foreach (var p in roster)
+            {
+                if (p == null) continue;
+                int idx = p.preferredLevelIndex;
+                if (idx < 0) continue;
+                if (!votesByLevel.TryGetValue(idx, out var list)) { list = new List<DioPlayer>(); votesByLevel[idx] = list; }
+                list.Add(p);
+            }
+
+            // Rebuild the grid.
+            int needed = net.levelCatalog.Length;
+            while (_spawnedLevelCards.Count < needed)
+            {
+                var go = Instantiate(levelCardTemplate, levelGridRoot);
+                go.SetActive(true);
+                _spawnedLevelCards.Add(go);
+            }
+            while (_spawnedLevelCards.Count > needed)
+            {
+                int last = _spawnedLevelCards.Count - 1;
+                Destroy(_spawnedLevelCards[last]);
+                _spawnedLevelCards.RemoveAt(last);
+            }
+
+            for (int i = 0; i < needed; i++)
+            {
+                var lvl = net.levelCatalog[i];
+                var card = _spawnedLevelCards[i];
+                ConfigureLevelCard(card, i, lvl, hostPick == i,
+                    votesByLevel.TryGetValue(i, out var vs) ? vs : null);
+            }
+        }
+
+        void ConfigureLevelCard(GameObject card, int idx, LevelData lvl, bool isHostPick, List<DioPlayer> voters)
+        {
+            // Title.
+            var title = card.transform.Find("Title")?.GetComponent<TMP_Text>();
+            if (title != null) title.text = lvl != null ? lvl.name : $"Level {idx + 1}";
+
+            // Host's authoritative pick = a thick gold ring around the card.
+            var hostRing = card.transform.Find("HostRing");
+            if (hostRing != null) hostRing.gameObject.SetActive(isHostPick);
+
+            // Local player's preference highlight: grow + lighter outline of
+            // their color (same idiom as the swatch).
+            var local = LocalPlayer;
+            bool isMine = local != null && local.preferredLevelIndex == idx;
+            var spring = card.GetComponent<SpringScale>();
+            if (spring != null) spring.SetTargetScale(isMine ? 1.06f : 1f);
+            var meRing = card.transform.Find("MeRing")?.GetComponent<Image>();
+            if (meRing != null)
+            {
+                meRing.gameObject.SetActive(isMine);
+                if (isMine && local != null) meRing.color = DioStyle.Lighten(ColorPalette.Get(local.colorIndex), 0.45f);
+            }
+
+            // Voter dots — one chip per player who voted for this level,
+            // colored with their color.
+            var dots = card.transform.Find("Voters");
+            if (dots != null)
+            {
+                for (int c = dots.childCount - 1; c >= 0; c--) Destroy(dots.GetChild(c).gameObject);
+                if (voters != null)
+                {
+                    foreach (var v in voters)
+                    {
+                        var dot = new GameObject($"Vote_{v.netId}", typeof(RectTransform), typeof(Image));
+                        dot.transform.SetParent(dots, false);
+                        ((RectTransform)dot.transform).sizeDelta = new Vector2(22, 22);
+                        var im = dot.GetComponent<Image>();
+                        im.color = ColorPalette.Get(v.colorIndex);
+                        im.raycastTarget = false;
+                    }
+                }
+            }
+
+            // Click handler — only sends a vote; the host's vote IS the
+            // authoritative pick (server uses ResolveSelectedLevel at start).
+            var btn = card.GetComponent<Button>();
+            if (btn != null)
+            {
+                btn.onClick.RemoveAllListeners();
+                btn.onClick.AddListener(() => OnLevelCardClicked(idx));
+            }
+        }
+
+        void OnLevelCardClicked(int idx)
+        {
+            LocalPrefs.PreferredLevelIndex = idx;
+            var p = LocalPlayer;
+            if (p != null) p.CmdSetPreferredLevel(idx);
         }
 
         void AddLobbyRow(DioPlayer p)
@@ -355,7 +506,17 @@ namespace Dio.UI
             var img = row.transform.Find("Color")?.GetComponent<Image>();
             if (img != null) img.color = ColorPalette.Get(p.colorIndex);
             var label = row.GetComponentInChildren<TMP_Text>();
-            if (label != null) label.text = p.playerName + (p.isLocalPlayer ? "  (you)" : "");
+            if (label != null)
+            {
+                // Skip the placeholder if it hasn't been replaced yet — show
+                // "joining…" for an instant rather than "Player 3" until the
+                // CmdSetName round-trip completes.
+                string name = string.IsNullOrEmpty(p.playerName) || p.playerName.StartsWith("Player ")
+                    ? (p.isLocalPlayer ? LocalPrefs.PlayerName : "Joining…")
+                    : p.playerName;
+                if (string.IsNullOrEmpty(name)) name = "Joining…";
+                label.text = name + (p.isLocalPlayer ? "  (you)" : "");
+            }
             _spawnedLobbyRows.Add(row);
         }
 

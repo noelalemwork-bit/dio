@@ -8,6 +8,7 @@ namespace Dio.Common
         const string NameKey   = "dio.player.name";
         const string ColorKey  = "dio.player.color";
         const string DirectIpKey = "dio.lastDirectIp";
+        const string PreferredLevelKey = "dio.preferredLevel";
 
         public static string PlayerName
         {
@@ -25,6 +26,13 @@ namespace Dio.Common
         {
             get => PlayerPrefs.GetString(DirectIpKey, string.Empty);
             set { PlayerPrefs.SetString(DirectIpKey, value ?? string.Empty); PlayerPrefs.Save(); }
+        }
+
+        // -1 = "no preference yet", server falls back to its default level.
+        public static int PreferredLevelIndex
+        {
+            get => PlayerPrefs.GetInt(PreferredLevelKey, -1);
+            set { PlayerPrefs.SetInt(PreferredLevelKey, value); PlayerPrefs.Save(); }
         }
     }
 }

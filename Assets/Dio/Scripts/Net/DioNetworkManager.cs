@@ -22,10 +22,38 @@ namespace Dio.Net
         [Tooltip("Networked car prefab. Spawned per-connection on race start.")]
         public GameObject carPrefab;
 
-        [Tooltip("Default level to load when the race starts. RaceBootstrap reads this on clients too.")]
+        [Tooltip("Fallback level if no level is selected (no players have voted, no host pick yet).")]
         public Dio.Level.LevelData defaultLevel;
 
+        [Tooltip("Levels selectable from the lobby. Index 0 is the suggested default. The host's preferredLevelIndex picks one from here.")]
+        public Dio.Level.LevelData[] levelCatalog;
+
         public DioNetworkDiscovery discovery;
+
+        public int CatalogSize => levelCatalog != null ? levelCatalog.Length : 0;
+
+        // Active level for the running race — set when ServerStartRace picks
+        // from the catalog; consulted by RaceBootstrap so clients build the
+        // visuals against the same level the server simulates.
+        public Dio.Level.LevelData ActiveLevel => _activeLevel != null ? _activeLevel : defaultLevel;
+        Dio.Level.LevelData _activeLevel;
+
+        // Resolve which level the host wants to play. Falls back from the
+        // host's vote → first catalog entry → defaultLevel.
+        public Dio.Level.LevelData ResolveSelectedLevel()
+        {
+            DioPlayer host = null;
+            foreach (var p in _players.Values)
+            {
+                if (p != null && p.connectionToClient == NetworkServer.localConnection) { host = p; break; }
+            }
+            int idx = host != null ? host.preferredLevelIndex : -1;
+            if (levelCatalog != null && idx >= 0 && idx < levelCatalog.Length && levelCatalog[idx] != null)
+                return levelCatalog[idx];
+            if (levelCatalog != null && levelCatalog.Length > 0 && levelCatalog[0] != null)
+                return levelCatalog[0];
+            return defaultLevel;
+        }
 
         // Server-side roster. Indexed by connection id.
         readonly Dictionary<int, DioPlayer> _players = new Dictionary<int, DioPlayer>();
@@ -138,9 +166,28 @@ namespace Dio.Net
                 return;
             }
 
+            // Resolve which level we're racing on. Locked in for the duration
+            // of the race; clients read it via DioNetworkManager.ActiveLevel
+            // (defaultLevel field stays as the bootstrap fallback for editor
+            // play-mode tests where no host has voted yet).
+            _activeLevel = ResolveSelectedLevel();
+            if (_activeLevel == null || !_activeLevel.HasMinimum)
+            {
+                Debug.LogError("[Dio] ServerStartRace: no valid level resolved (catalog empty + defaultLevel missing).");
+                return;
+            }
+
+            // Embed the selected level's GUID in the start message so clients
+            // can pick the matching asset from their catalog.
+            string lvlGuid = string.Empty;
+#if UNITY_EDITOR
+            string p2p = UnityEditor.AssetDatabase.GetAssetPath(_activeLevel);
+            if (!string.IsNullOrEmpty(p2p)) lvlGuid = UnityEditor.AssetDatabase.AssetPathToGUID(p2p);
+#endif
+
             var msg = new RaceStartMessage
             {
-                levelGuid = string.Empty,
+                levelGuid = lvlGuid,
                 seed = Random.Range(int.MinValue, int.MaxValue),
                 // Long delay so the cinematic intro gets time to swoop the
                 // camera in + run the 3-2-1-GO! countdown. RaceIntro on each
@@ -151,8 +198,7 @@ namespace Dio.Net
             // Build the server-side planet FIRST so newly-spawned cars can find it
             // in their Awake. Otherwise SphericalGravity has nothing to fall back to.
             var bootstrap = FindAnyObjectByType<Dio.Level.RaceBootstrap>();
-            if (bootstrap != null && defaultLevel != null)
-                bootstrap.BuildVisualScene(defaultLevel);
+            if (bootstrap != null) bootstrap.BuildVisualScene(_activeLevel);
 
             // Reset all server-side per-race state on every player object.
             foreach (var p in _players.Values)
@@ -166,7 +212,7 @@ namespace Dio.Net
             // is triggered via OnRaceStarted, which fires from the message handler.
             ServerSpawnCarsForAllPlayers();
             ServerSpawnMidTrackPowerups();
-            _totalTrackLength = Dio.Level.TrackBuilder.TotalArcLength(defaultLevel);
+            _totalTrackLength = Dio.Level.TrackBuilder.TotalArcLength(_activeLevel);
             _raceActive = true;
 
             // Tell every client (host's local client included).
@@ -184,9 +230,10 @@ namespace Dio.Net
         void ServerSpawnCarsForAllPlayers()
         {
             if (carPrefab == null) { Debug.LogError("[Dio] carPrefab is null on DioNetworkManager."); return; }
-            if (defaultLevel == null || !defaultLevel.HasMinimum)
+            var lvl = ActiveLevel;
+            if (lvl == null || !lvl.HasMinimum)
             {
-                Debug.LogError("[Dio] defaultLevel missing or has fewer than 2 points.");
+                Debug.LogError("[Dio] active level missing or has fewer than 2 points.");
                 return;
             }
 
@@ -197,7 +244,7 @@ namespace Dio.Net
                 var conn = NetworkServer.connections.TryGetValue(kv.Key, out var c) ? c : null;
                 var player = kv.Value;
                 Vector3 pos; Quaternion rot;
-                ComputeStartTransform(defaultLevel, i, total, out pos, out rot);
+                ComputeStartTransform(lvl, i, total, out pos, out rot);
 
                 var carGo = Instantiate(carPrefab, pos, rot);
                 NetworkServer.Spawn(carGo, conn);
@@ -211,7 +258,7 @@ namespace Dio.Net
             // testing without the lobby).
             if (_players.Count == 0 && soloBypass)
             {
-                ComputeStartTransform(defaultLevel, 0, 1, out var pos, out var rot);
+                ComputeStartTransform(lvl, 0, 1, out var pos, out var rot);
                 var carGo = Instantiate(carPrefab, pos, rot);
                 NetworkServer.Spawn(carGo);
             }
@@ -223,7 +270,8 @@ namespace Dio.Net
         [Server]
         void ServerSpawnMidTrackPowerups()
         {
-            if (defaultLevel == null || !defaultLevel.HasMinimum) return;
+            var lvl = ActiveLevel;
+            if (lvl == null || !lvl.HasMinimum) return;
             var pu = FindAnyObjectByType<Dio.Powerups.PowerupBootstrap>();
             if (pu == null || pu.powerupBoxPrefab == null)
             {
@@ -256,12 +304,12 @@ namespace Dio.Net
 
             // Build the local Frenet frame at the geodesic midpoint and lay
             // the row out evenly across the track width.
-            Vector3 mid = Dio.Level.TrackBuilder.SampleAt(defaultLevel, 0.5f);
+            Vector3 mid = Dio.Level.TrackBuilder.SampleAt(lvl, 0.5f);
             Vector3 midDir = mid.normalized;
-            Vector3 tangent = Dio.Level.TrackBuilder.TangentAt(defaultLevel, 0.5f);
+            Vector3 tangent = Dio.Level.TrackBuilder.TangentAt(lvl, 0.5f);
             Vector3 right = Vector3.Cross(tangent, midDir).normalized;
 
-            float trackW = defaultLevel.trackWidth;
+            float trackW = lvl.trackWidth;
             float spacing = trackW / (picked.Count + 1f);
 
             // All boxes in this row share the same group id, so a player can
@@ -299,8 +347,11 @@ namespace Dio.Net
             const float forwardSpacing = 4.5f;
 
             Vector3 startDir = level.points[0].directionFromCenter.normalized;
-            Vector3 nextDir  = level.points[1].directionFromCenter.normalized;
-            Vector3 tangent  = Dio.Level.GeodesicUtil.TangentAt(startDir, nextDir);
+            // Use the bezier's tangent at t=0 of the first segment, not the
+            // raw geodesic tangent — they agree only when the start handle
+            // points along the geodesic, which is no longer the default
+            // once the level editor authors curved sections.
+            Vector3 tangent  = Dio.Level.TrackBuilder.TangentAt(level, 0f);
             Vector3 right    = Vector3.Cross(startDir, tangent).normalized;
 
             int row = slot / perRow;
@@ -351,7 +402,8 @@ namespace Dio.Net
         {
             base.Update();
             if (!NetworkServer.active || !_raceActive) return;
-            if (defaultLevel == null || !defaultLevel.HasMinimum) return;
+            var lvl = ActiveLevel;
+            if (lvl == null || !lvl.HasMinimum) return;
             if (_totalTrackLength <= 0.01f) return;
 
             var planet = Dio.Level.RaceBootstrap.CurrentPlanet;
@@ -363,7 +415,7 @@ namespace Dio.Net
                 var car = ni != null ? ni.GetComponent<DioCar>() : null;
                 if (car == null) continue;
 
-                float arc = Dio.Level.TrackBuilder.ArcLengthOf(defaultLevel, car.transform.position, planetCenter);
+                float arc = Dio.Level.TrackBuilder.ArcLengthOf(lvl, car.transform.position, planetCenter);
                 // Publish so HUDs / minimap markers can show race position.
                 car.progressArc = arc;
 

@@ -10,17 +10,17 @@ MonoBehaviour:
   m_Enabled: 1
   m_EditorHideFlags: 0
   m_Script: {fileID: 11500000, guid: 1bc9a7716bc36b04f93b3d69603db1de, type: 3}
-  m_Name: DefaultLevel
+  m_Name: Level 4
   m_EditorClassIdentifier: Assembly-CSharp::Dio.Level.LevelData
   planetRadius: 200
-  seed: 42
+  seed: 499563056
   trackWidth: 15
   points:
   - directionFromCenter: {x: 0, y: 1, z: 0}
     bank: 0
     inHandle: {x: 0, y: 0, z: 0}
-    outHandle: {x: 0, y: 0, z: 0}
-  - directionFromCenter: {x: 0.696526, y: 0.39801487, z: 0.5970223}
+    outHandle: {x: -0.8305891, y: 0.32989419, z: -0.4486553}
+  - directionFromCenter: {x: -0.548013, y: -0.7823397, z: -0.29601753}
     bank: 0
-    inHandle: {x: 0, y: 0, z: 0}
+    inHandle: {x: -0.8305891, y: 0.32989419, z: -0.4486553}
     outHandle: {x: 0, y: 0, z: 0}

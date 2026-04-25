@@ -1,4 +1,5 @@
 using UnityEngine;
+using Dio.Common;
 using Dio.Player;
 
 namespace Dio.CameraRig
@@ -39,6 +40,26 @@ namespace Dio.CameraRig
         [Header("Bumper / Hood offsets (target local space)")]
         public Vector3 bumperOffset = new Vector3(0f, 0.6f, 1.3f);
         public Vector3 hoodOffset = new Vector3(0f, 1.05f, 0.4f);
+
+        [Header("Cinematic intro")]
+        // Multipliers applied to chaseDistance / chaseHeight at the START of
+        // the intro. Higher = further out + higher up = more dramatic swoop.
+        public float introDistanceMul = 4f;
+        public float introHeightMul = 5f;
+        // 0 = at chase pose. 1 = at cinematic pose. Drives a cubic-ease blend
+        // back down to the chase pose over `_introDuration` seconds.
+        float _introBlend = 0f;
+        float _introDuration = 0f;
+
+        /// Place the camera at a high, swoopy offset above + behind the
+        /// player and ease back to the regular chase pose over `duration`
+        /// seconds. Called by RaceBootstrap right after camera attach so
+        /// the countdown UI plays over a moving 3-quarter establishing shot.
+        public void StartCinematicIntro(float duration)
+        {
+            _introDuration = Mathf.Max(0.01f, duration);
+            _introBlend = 1f;
+        }
 
         Camera _cam;
 
@@ -84,10 +105,36 @@ namespace Dio.CameraRig
 
         void ApplyChase(Vector3 fwd, Vector3 up)
         {
-            Vector3 desired = target.position - fwd * chaseDistance + up * chaseHeight;
-            Quaternion desiredRot = Quaternion.LookRotation((target.position + up * 0.5f) - desired, up);
-            transform.position = Vector3.Lerp(transform.position, desired, chasePosLerp * Time.deltaTime);
-            transform.rotation = Quaternion.Slerp(transform.rotation, desiredRot, chaseRotLerp * Time.deltaTime);
+            Vector3 chaseDesired = target.position - fwd * chaseDistance + up * chaseHeight;
+            Quaternion chaseDesiredRot = Quaternion.LookRotation((target.position + up * 0.5f) - chaseDesired, up);
+
+            if (_introBlend > 0f)
+            {
+                // Tick the blend down (1 → 0) over _introDuration; cubic-out
+                // means we accelerate INTO the chase pose, settling smoothly
+                // right at the GO! moment.
+                _introBlend = Mathf.Max(0f, _introBlend - Time.deltaTime / _introDuration);
+                float t = 1f - _introBlend;                    // 0 at start, 1 at end
+                float blend = DioStyle.EaseOutCubic(t);
+
+                // Cinematic pose: way back along tangent, way up along normal.
+                // That's "from above the player, looking down and forward" —
+                // exactly what the countdown wants behind it.
+                Vector3 cinDesired = target.position
+                    - fwd * (chaseDistance * introDistanceMul)
+                    + up  * (chaseHeight   * introHeightMul);
+                Quaternion cinDesiredRot = Quaternion.LookRotation(
+                    (target.position + up * 0.5f) - cinDesired, up);
+
+                Vector3 pos = Vector3.Lerp(cinDesired, chaseDesired, blend);
+                Quaternion rot = Quaternion.Slerp(cinDesiredRot, chaseDesiredRot, blend);
+                transform.position = pos;
+                transform.rotation = rot;
+                return;
+            }
+
+            transform.position = Vector3.Lerp(transform.position, chaseDesired, chasePosLerp * Time.deltaTime);
+            transform.rotation = Quaternion.Slerp(transform.rotation, chaseDesiredRot, chaseRotLerp * Time.deltaTime);
         }
 
         void SnapTo(Vector3 pos, Quaternion rot)

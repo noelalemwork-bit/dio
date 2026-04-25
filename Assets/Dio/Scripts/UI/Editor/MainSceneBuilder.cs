@@ -183,6 +183,11 @@ namespace Dio.UI.EditorTools
             var lvl = AssetDatabase.LoadAssetAtPath<LevelData>("Assets/Dio/Levels/DefaultLevel.asset");
             if (lvl != null) mgr.defaultLevel = lvl;
 
+            // Populate the level catalog from every LevelData asset under
+            // Assets/Dio/Levels (sorted by file name). The host's vote on
+            // this catalog is the authoritative pick at race start.
+            mgr.levelCatalog = LoadLevelCatalog();
+
             // Populate spawnPrefabs so base NetworkManager.OnStartClient auto-registers
             // every networked prefab. Without this, server-spawned cars / obstacles
             // arrive at clients with no prefab to instantiate and Mirror logs
@@ -439,28 +444,86 @@ namespace Dio.UI.EditorTools
             AddText(browserEntry.transform, "Subtitle", "Host · 0/8 · 0.0.0.0", 16, FontStyles.Normal);
 
             // ---- Lobby panel ----
+            // Stretches to fit the screen with margins instead of a fixed
+            // 680×600 — older fixed sizes overlapped on small windows.
             var lobby = AddPanel(menuRoot.transform, "LobbyPanel", new Color(1, 1, 1, 0.95f));
             var lrt = (RectTransform)lobby.transform;
             lrt.anchorMin = new Vector2(0.5f, 0.5f); lrt.anchorMax = new Vector2(0.5f, 0.5f);
-            lrt.sizeDelta = new Vector2(680, 600);
+            lrt.sizeDelta = new Vector2(1100, 720);
             lobby.SetActive(false);
 
+            // childControlHeight=true so the layout RESPECTS each child's
+            // LayoutElement.preferredHeight / flexibleHeight. With the old
+            // `false` setting, children that didn't manually set sizeDelta
+            // (LobbyMain in particular) were laid out at zero height and
+            // their children rendered outside the parent rect — which is
+            // why the level grid was visible behind / on top of the
+            // start/leave buttons row.
             var lvg = lobby.AddComponent<VerticalLayoutGroup>();
             lvg.padding = new RectOffset(20, 20, 20, 20); lvg.spacing = 12;
             lvg.childControlWidth = true; lvg.childForceExpandWidth = true;
-            lvg.childControlHeight = false; lvg.childForceExpandHeight = false;
+            lvg.childControlHeight = true; lvg.childForceExpandHeight = false;
 
             var lobbyTitle = AddText(lobby.transform, "LobbyTitle", "Lobby", 36, FontStyles.Bold);
-            var lobbyScroll = AddScrollView(lobby.transform, "LobbyList", out RectTransform lobbyContent);
+            var titleLE = lobbyTitle.gameObject.AddComponent<LayoutElement>();
+            titleLE.preferredHeight = 50; titleLE.flexibleHeight = 0;
+
+            // Two-column row that takes the remaining vertical space.
+            var lobbyMain = new GameObject("LobbyMain", typeof(RectTransform));
+            lobbyMain.transform.SetParent(lobby.transform, false);
+            var lmle = lobbyMain.AddComponent<LayoutElement>();
+            lmle.flexibleHeight = 1; lmle.minHeight = 280;
+            var lmHg = lobbyMain.AddComponent<HorizontalLayoutGroup>();
+            lmHg.spacing = 12; lmHg.childControlHeight = true; lmHg.childForceExpandHeight = true;
+            lmHg.childControlWidth = true; lmHg.childForceExpandWidth = false;
+
+            // Roster scroll (left).
+            var lobbyScroll = AddScrollView(lobbyMain.transform, "LobbyList", out RectTransform lobbyContent);
             var lobbyLE = lobbyScroll.gameObject.AddComponent<LayoutElement>();
-            lobbyLE.flexibleHeight = 1; lobbyLE.minHeight = 360;
+            lobbyLE.preferredWidth = 280; lobbyLE.minWidth = 240;
+
+            // Level picker (right) — fills the rest of the row.
+            var pickerPanel = new GameObject("LevelPicker", typeof(RectTransform), typeof(Image));
+            pickerPanel.transform.SetParent(lobbyMain.transform, false);
+            pickerPanel.GetComponent<Image>().color = new Color(1f, 1f, 1f, 0.55f);
+            var ple = pickerPanel.AddComponent<LayoutElement>();
+            ple.flexibleWidth = 1; ple.preferredWidth = 800; ple.minWidth = 480;
+            var pickerVG = pickerPanel.AddComponent<VerticalLayoutGroup>();
+            pickerVG.padding = new RectOffset(12, 12, 12, 12); pickerVG.spacing = 8;
+            pickerVG.childControlWidth = true; pickerVG.childForceExpandWidth = true;
+            pickerVG.childControlHeight = true; pickerVG.childForceExpandHeight = false;
+
+            var pickerTitle = AddText(pickerPanel.transform, "PickerTitle", "Pick a level (host's choice is authoritative)", 18, FontStyles.Bold);
+            var pickerTitleLE = pickerTitle.gameObject.AddComponent<LayoutElement>();
+            pickerTitleLE.preferredHeight = 28; pickerTitleLE.flexibleHeight = 0;
+
+            // Grid stretches to fill remaining vertical space.
+            var grid = new GameObject("LevelGrid", typeof(RectTransform), typeof(GridLayoutGroup));
+            grid.transform.SetParent(pickerPanel.transform, false);
+            var glg = grid.GetComponent<GridLayoutGroup>();
+            glg.cellSize = new Vector2(220, 130);
+            glg.spacing = new Vector2(12, 12);
+            glg.startCorner = GridLayoutGroup.Corner.UpperLeft;
+            glg.startAxis = GridLayoutGroup.Axis.Horizontal;
+            glg.constraint = GridLayoutGroup.Constraint.FixedColumnCount;
+            glg.constraintCount = 3;
+            glg.childAlignment = TextAnchor.UpperLeft;
+            glg.padding = new RectOffset(4, 4, 4, 4);
+            var glgLe = grid.AddComponent<LayoutElement>();
+            glgLe.flexibleHeight = 1; glgLe.minHeight = 280;
+
+            // Card template (instantiated by the controller per catalog entry).
+            var levelCard = BuildLevelCardTemplate(grid.transform);
+            levelCard.SetActive(false);
 
             var lobbyButtonsRow = new GameObject("Buttons", typeof(RectTransform));
             lobbyButtonsRow.transform.SetParent(lobby.transform, false);
             var lhg = lobbyButtonsRow.AddComponent<HorizontalLayoutGroup>();
             lhg.spacing = 12; lhg.childAlignment = TextAnchor.MiddleCenter;
             lhg.childControlWidth = false; lhg.childControlHeight = false;
-            ((RectTransform)lobbyButtonsRow.transform).sizeDelta = new Vector2(0, 64);
+            ((RectTransform)lobbyButtonsRow.transform).sizeDelta = new Vector2(0, 96);
+            var btnRowLE = lobbyButtonsRow.AddComponent<LayoutElement>();
+            btnRowLE.preferredHeight = 96; btnRowLE.flexibleHeight = 0;
 
             var leaveBtn = AddBigButton(lobbyButtonsRow.transform, "LeaveButton", "Leave", new Color(0.85f, 0.32f, 0.24f, 1f), "menu_leave");
             ((RectTransform)leaveBtn.transform).sizeDelta = new Vector2(180, 56);
@@ -856,6 +919,8 @@ namespace Dio.UI.EditorTools
             ctrl.lobbyEntryTemplate = lobbyEntry;
             ctrl.startButton = startBtn;
             ctrl.leaveButton = leaveBtn;
+            ctrl.levelGridRoot = grid.transform;
+            ctrl.levelCardTemplate = levelCard;
             ctrl.net = netInstance.GetComponent<DioNetworkManager>();
             ctrl.discovery = netInstance.GetComponent<DioNetworkDiscovery>();
             ctrl.menuRoot = menuRoot;
@@ -879,6 +944,88 @@ namespace Dio.UI.EditorTools
             }
 
             Debug.Log($"[Dio] Built Main scene at {MainScenePath}");
+        }
+
+        // ---------- level catalog ----------
+
+        // Pulls every LevelData under Assets/Dio/Levels (sorted by file name)
+        // for the host to vote on. New levels created with Tools → Dio →
+        // New Level land in this folder, so they auto-appear in the lobby.
+        static LevelData[] LoadLevelCatalog()
+        {
+            var guids = AssetDatabase.FindAssets("t:LevelData", new[] { LevelsDir });
+            var paths = new System.Collections.Generic.List<string>(guids.Length);
+            foreach (var g in guids) paths.Add(AssetDatabase.GUIDToAssetPath(g));
+            paths.Sort();
+            var list = new System.Collections.Generic.List<LevelData>(paths.Count);
+            foreach (var p in paths)
+            {
+                var lvl = AssetDatabase.LoadAssetAtPath<LevelData>(p);
+                if (lvl != null) list.Add(lvl);
+            }
+            return list.ToArray();
+        }
+
+        // Card template — title at top, voter dot row at bottom, two
+        // visibility-toggled rings (gold = host's pick, lighter player-color
+        // = local player's vote).
+        static GameObject BuildLevelCardTemplate(Transform parent)
+        {
+            var card = new GameObject("LevelCardTemplate",
+                typeof(RectTransform), typeof(Image), typeof(Button), typeof(Dio.Common.SpringScale));
+            card.transform.SetParent(parent, false);
+            card.GetComponent<Image>().color = DioStyle.PaperLight;
+            ((RectTransform)card.transform).sizeDelta = new Vector2(180, 110);
+
+            // Gold "host pick" ring (slightly larger than the card itself).
+            var gold = new GameObject("HostRing", typeof(RectTransform), typeof(Image));
+            gold.transform.SetParent(card.transform, false);
+            var grt = (RectTransform)gold.transform;
+            grt.anchorMin = Vector2.zero; grt.anchorMax = Vector2.one;
+            grt.offsetMin = new Vector2(-6, -6); grt.offsetMax = new Vector2(6, 6);
+            var gimg = gold.GetComponent<Image>();
+            gimg.color = DioStyle.Sun;
+            gimg.raycastTarget = false;
+            gold.transform.SetSiblingIndex(0);
+            gold.SetActive(false);
+
+            // Local-vote outline ring (lighter player color, behind card).
+            var me = new GameObject("MeRing", typeof(RectTransform), typeof(Image));
+            me.transform.SetParent(card.transform, false);
+            var mert = (RectTransform)me.transform;
+            mert.anchorMin = Vector2.zero; mert.anchorMax = Vector2.one;
+            mert.offsetMin = new Vector2(-3, -3); mert.offsetMax = new Vector2(3, 3);
+            var meImg = me.GetComponent<Image>();
+            meImg.color = Color.white; // controller overwrites with player color
+            meImg.raycastTarget = false;
+            me.transform.SetSiblingIndex(1);
+            me.SetActive(false);
+
+            // Title.
+            var titleGo = new GameObject("Title", typeof(RectTransform));
+            titleGo.transform.SetParent(card.transform, false);
+            var trt = (RectTransform)titleGo.transform;
+            trt.anchorMin = new Vector2(0, 0.4f); trt.anchorMax = new Vector2(1, 1);
+            trt.offsetMin = new Vector2(10, 4); trt.offsetMax = new Vector2(-10, -4);
+            var ttext = titleGo.AddComponent<TextMeshProUGUI>();
+            ttext.text = "Level"; ttext.fontSize = 22; ttext.fontStyle = FontStyles.Bold;
+            ttext.color = DioStyle.InkDark;
+            ttext.alignment = TextAlignmentOptions.Midline;
+            ttext.font = TMP_Settings.defaultFontAsset;
+            ttext.raycastTarget = false;
+
+            // Voter dot row — controller spawns dots into here at refresh.
+            var voters = new GameObject("Voters", typeof(RectTransform), typeof(HorizontalLayoutGroup));
+            voters.transform.SetParent(card.transform, false);
+            var vrt = (RectTransform)voters.transform;
+            vrt.anchorMin = new Vector2(0, 0); vrt.anchorMax = new Vector2(1, 0.4f);
+            vrt.offsetMin = new Vector2(8, 6); vrt.offsetMax = new Vector2(-8, -2);
+            var vh = voters.GetComponent<HorizontalLayoutGroup>();
+            vh.spacing = 4; vh.childAlignment = TextAnchor.MiddleCenter;
+            vh.childControlWidth = false; vh.childControlHeight = false;
+            vh.childForceExpandWidth = false; vh.childForceExpandHeight = false;
+
+            return card;
         }
 
         // ---------- helpers ----------
@@ -1028,22 +1175,33 @@ namespace Dio.UI.EditorTools
 
         static Button AddBigButton(Transform parent, string name, string label, Color color, string svgIconName = null)
         {
-            var go = new GameObject(name, typeof(RectTransform), typeof(Image), typeof(Button));
+            var go = new GameObject(name, typeof(RectTransform), typeof(Image), typeof(Button), typeof(Dio.Common.SpringScale));
             go.transform.SetParent(parent, false);
             var img = go.GetComponent<Image>();
             img.color = color;
             ((RectTransform)go.transform).sizeDelta = new Vector2(240, 96);
 
-            // Label fills the button (centered).
-            var t = AddText(go.transform, "Label", label, 30, FontStyles.Bold);
+            const float IconSize = 56f;
+            const float IconPad = 14f;
+            bool hasIcon = !string.IsNullOrEmpty(svgIconName);
+
+            // Label fills the button MINUS the icon column on the left when
+            // an icon is present. This is the missing piece in the previous
+            // version — the label was anchored full-width with center
+            // alignment, so it sat exactly under the icon.
+            var t = AddText(go.transform, "Label", label, 28, FontStyles.Bold);
             t.alignment = TextAlignmentOptions.Center;
             t.color = Color.white;
+            t.enableAutoSizing = true;
+            t.fontSizeMin = 16; t.fontSizeMax = 30;
+            t.enableWordWrapping = false;
             var trt = (RectTransform)t.transform;
             trt.anchorMin = Vector2.zero; trt.anchorMax = Vector2.one;
-            trt.offsetMin = Vector2.zero; trt.offsetMax = Vector2.zero;
+            float leftInset = hasIcon ? (IconPad + IconSize + IconPad) : 12f;
+            trt.offsetMin = new Vector2(leftInset, 6); trt.offsetMax = new Vector2(-12, -6);
+            t.raycastTarget = false;
 
-            // Optional SVG icon at the left, anchored to the left edge.
-            if (!string.IsNullOrEmpty(svgIconName))
+            if (hasIcon)
             {
                 var iconGo = new GameObject("Icon", typeof(RectTransform));
                 iconGo.transform.SetParent(go.transform, false);
@@ -1051,12 +1209,24 @@ namespace Dio.UI.EditorTools
                 irt.anchorMin = new Vector2(0, 0.5f);
                 irt.anchorMax = new Vector2(0, 0.5f);
                 irt.pivot = new Vector2(0, 0.5f);
-                irt.sizeDelta = new Vector2(56, 56);
-                irt.anchoredPosition = new Vector2(16, 0);
+                irt.sizeDelta = new Vector2(IconSize, IconSize);
+                irt.anchoredPosition = new Vector2(IconPad, 0);
                 SvgIconLoader.AttachIcon(iconGo, LoadSvg(svgIconName), Color.white);
             }
 
-            return go.GetComponent<Button>();
+            // Press-feedback: gentle spring pulse on click. SpringScale's
+            // settle threshold is small enough this feels snappy without
+            // looking like a glitch.
+            var btn = go.GetComponent<Button>();
+            var spring = go.GetComponent<Dio.Common.SpringScale>();
+            spring.Snap(Vector3.one);
+            btn.onClick.AddListener(() =>
+            {
+                spring.Snap(Vector3.one * 0.94f);
+                spring.SetTargetScale(1f);
+            });
+
+            return btn;
         }
 
         // Pulls the SVG sprite for each PowerupKind so the RaceHUD can swap them in.

@@ -42,5 +42,23 @@ namespace Dio.Level
             a = a.normalized; b = b.normalized;
             return Vector3.ProjectOnPlane(b - a, a).normalized;
         }
+
+        /// Spherical cubic Bezier via De Casteljau, where every linear
+        /// interpolation is replaced by Slerp on the unit sphere. All four
+        /// inputs are unit directions from the sphere center; the result is
+        /// a unit direction. With p1 = p2 = midpoint(p0, p3) this collapses
+        /// to a near-geodesic; with p1, p2 pulled away from the chord it
+        /// curves on the sphere just like a planar cubic Bezier curves in
+        /// the plane — so we can author tracks as Beziers and they stay
+        /// exactly on the surface.
+        public static Vector3 SphericalBezier(Vector3 p0, Vector3 p1, Vector3 p2, Vector3 p3, float t)
+        {
+            Vector3 q0 = Vector3.Slerp(p0, p1, t);
+            Vector3 q1 = Vector3.Slerp(p1, p2, t);
+            Vector3 q2 = Vector3.Slerp(p2, p3, t);
+            Vector3 r0 = Vector3.Slerp(q0, q1, t);
+            Vector3 r1 = Vector3.Slerp(q1, q2, t);
+            return Vector3.Slerp(r0, r1, t).normalized;
+        }
     }
 }

@@ -1,0 +1,34 @@
+%YAML 1.1
+%TAG !u! tag:unity3d.com,2011:
+--- !u!114 &11400000
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 0}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: 1bc9a7716bc36b04f93b3d69603db1de, type: 3}
+  m_Name: Level 6
+  m_EditorClassIdentifier: Assembly-CSharp::Dio.Level.LevelData
+  planetRadius: 200
+  seed: 711730187
+  trackWidth: 15
+  points:
+  - directionFromCenter: {x: 0.4366051, y: 0.89947844, z: 0.017735902}
+    bank: 0
+    inHandle: {x: 0, y: 0, z: 0}
+    outHandle: {x: 0.24839239, y: 0.9681627, z: -0.031019576}
+  - directionFromCenter: {x: -0.3956231, y: 0.9155767, z: -0.07212303}
+    bank: 0
+    inHandle: {x: -0.064949416, y: 0.97562146, z: 0.20962901}
+    outHandle: {x: -0.76208055, y: 0.40808612, z: -0.5026917}
+  - directionFromCenter: {x: 0.020568581, y: 0.8801918, z: -0.4741722}
+    bank: 0
+    inHandle: {x: 0.20499937, y: 0.9725524, z: -0.1100772}
+    outHandle: {x: -0.14126924, y: 0.677598, z: -0.7217367}
+  - directionFromCenter: {x: -0.5613521, y: 0.5579362, z: -0.611221}
+    bank: 0
+    inHandle: {x: -0.31203058, y: 0.9199882, z: -0.23718907}
+    outHandle: {x: 0, y: 0, z: 0}

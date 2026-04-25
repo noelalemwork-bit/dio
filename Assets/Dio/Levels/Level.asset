@@ -32,5 +32,33 @@ MonoBehaviour:
     bank: 0
   - directionFromCenter: {x: 0, y: 0, z: 0}
     bank: 0
+  - directionFromCenter: {x: 0, y: 0, z: 0}
+    bank: 0
+  - directionFromCenter: {x: 0, y: 0, z: 0}
+    bank: 0
+  - directionFromCenter: {x: 0, y: 0, z: 0}
+    bank: 0
+  - directionFromCenter: {x: 0, y: 0, z: 0}
+    bank: 0
+  - directionFromCenter: {x: 0, y: 0, z: 0}
+    bank: 0
+  - directionFromCenter: {x: 0, y: 0, z: 0}
+    bank: 0
+  - directionFromCenter: {x: 0, y: 0, z: 0}
+    bank: 0
+  - directionFromCenter: {x: 0, y: 0, z: 0}
+    bank: 0
+  - directionFromCenter: {x: 0, y: 0, z: 0}
+    bank: 0
+  - directionFromCenter: {x: 0, y: 0, z: 0}
+    bank: 0
+  - directionFromCenter: {x: 0, y: 0, z: 0}
+    bank: 0
+  - directionFromCenter: {x: 0, y: 0, z: 0}
+    bank: 0
+  - directionFromCenter: {x: 0, y: 0, z: 0}
+    bank: 0
+  - directionFromCenter: {x: 0, y: 0, z: 0}
+    bank: 0
   - directionFromCenter: {x: 0.0033818136, y: -0.64251643, z: -0.76626444}
     bank: 0

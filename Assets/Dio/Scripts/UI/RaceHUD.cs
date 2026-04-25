@@ -185,7 +185,14 @@ namespace Dio.UI
             {
                 var car = ni != null ? ni.GetComponent<DioCar>() : null;
                 if (car == null) continue;
-                string name = string.IsNullOrEmpty(car.ownerName) ? "Player" : car.ownerName;
+                // ownerName is a SyncVar that propagates from the server's
+                // DioCar.ServerInitialize a frame or two after car spawn —
+                // fall back to the local saved name for our own car so we
+                // never see the "Player" placeholder on screen.
+                string name;
+                if (!string.IsNullOrEmpty(car.ownerName)) name = car.ownerName;
+                else if (car.isOwned && !string.IsNullOrWhiteSpace(Dio.Common.LocalPrefs.PlayerName)) name = Dio.Common.LocalPrefs.PlayerName;
+                else name = "Racer";
                 _scratchEntries.Add((name, car.progressArc, car.isOwned));
             }
             // Negate the distance value so the existing ascending sort puts

@@ -9,7 +9,7 @@ MonoBehaviour:
   m_GameObject: {fileID: 0}
   m_Enabled: 1
   m_EditorHideFlags: 0
-  m_Script: {fileID: 11500000, guid: be6e569f0d9e0894eaa7321b83e13fc5, type: 3}
+  m_Script: {fileID: 11500000, guid: 53db201af860a4243980de39e10133ba, type: 3}
   m_Name: DefaultKart
   m_EditorClassIdentifier: Assembly-CSharp::Dio.Player.VehicleProfile
   displayName: Default Kart
