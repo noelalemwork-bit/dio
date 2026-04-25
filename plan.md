@@ -213,7 +213,7 @@ Stored in `Assets/Dio/Scripts/Common/ColorPalette.cs` as a `static readonly Colo
 
 | # | Name | Pattern | State applied | Notes |
 |---|---|---|---|---|
-| 1 | **Boost** | self-buff | `SpeedBoostState` | +45 % max speed for 1.4 s |
+| 1 | **Boost** | self-buff | `nd SpeedBoostState` | +45 % max speed for 1.4 s |
 | 2 | **Triple Boost** | self-buff (3 charges) | `SpeedBoostState × 3` | `PowerupHolder.charges` |
 | 3 | **Star** | self-buff | `StarState` | +20 % speed, invincible (collision filtering hook on `CarStateMachine.IsInvincible`) |
 | 4 | **Lightning** | global | `ShrunkState` to all others | server iterates `NetworkServer.spawned` |
@@ -288,14 +288,16 @@ PowerupEffect (abstract)
 | Procedural track mesh | ❌ M2 | `LevelData` already feeds into a future `TrackMeshBuilder`; today the geodesic is shown via `LineRenderer` only — there's no driveable track surface yet beyond the sphere itself |
 | Lap / finish detection | ❌ M2 | Need a per-car arc-length tracker; Blue Shell currently uses a placeholder "leader" picker |
 | Predicted rigidbody for local player | ❌ M3 | Plan section §4.3 Phase B |
-| SVG corner accents | ⏳ partial | The `.svg` files exist under `Assets/Dio/UI/Svg/` and the scene builder tries to load them as Sprites; without the optional `com.unity.vectorgraphics` package they don't import as Sprites and we fall back to flat colored rects. Install the package to enable. |
+| SVG icons (menu + HUD + powerups) | ✅ done | 16 icons under `Assets/Dio/UI/Svg/` (menu_host, menu_join, menu_start, menu_leave, hud_minimap, hud_powerup_box, hud_speed, hud_player_marker, powerup_boost/star/banana/shell/blueshell/bomb/tornado/oil + the original flag/planet/bolt). `SvgIconLoader` adds `SVGImage` (vector quality) when `com.unity.vectorgraphics` is installed, falls back to plain `Image` with the SVG-imported sprite, falls back to a flat colored rect. `Tools → Dio → Build → Re-import SVGs` forces the SVGImporter to re-process every `.svg` (run this after first installing the package). |
+| Race HUD | ✅ M1 minimum | Minimap (placeholder globe SVG), held-powerup slot with charge count, km/h readout. Built under `RaceHUDRoot`; `MainMenuController` swaps `MenuRoot` ↔ `RaceHUDRoot` on race start. |
+| Render-texture minimap | ❌ M2 | See §11.4 — top-down camera + RawImage; cars and pickups become UI markers parented to the minimap RectTransform rather than rendered into the texture. |
 | Asmdefs for Dio code | ⏳ deferred | All Dio scripts (runtime + editor) compile into `Assembly-CSharp` / `Assembly-CSharp-Editor`. Verified clean — no stray asmdefs. Revisit when build times bite. |
 
 ### 11.1 Known bugs / sharp edges
 
 - **Solo-bypass no-player branch** (`_players.Count == 0`): the spawned car has no authority, so the host can't drive it. Normally never hit because StartHost adds a DioPlayer for the local connection — but if you bypass the menu, you'll see a static car. Workaround: always go through "Host Game" in the menu.
 - **Blue Shell target selection** is a placeholder dot-product. Replace with the M2 arc-length-progress tracker.
-- **Visual SVG hookup** is still placeholder colored rects in `MainSceneBuilder` until you swap them for `SVGImage` (the package is included but the loading path isn't yet wired).
+- **Vector-quality SVG rendering** requires the `com.unity.vectorgraphics` package; without it, SVGs display through plain `Image` (still readable, just rasterised at the import resolution). With the package, install it then run `Tools → Dio → Build → Re-import SVGs` once so the new importer processes the existing `.svg` files.
 - **PowerupHolder activation** uses `E` by default — wire `activateAction` in the inspector to a real Input System binding when adding controller support.
 
 ### 11.2 How to run the demo
@@ -323,6 +325,28 @@ To test multiplayer: build a standalone, run host in editor, connect with the st
 | `Tools → Dio → Build → Powerup Prefabs` | All networked obstacle/box prefabs + their material assets |
 | `Tools → Dio → New Level` | Creates a *brand new* `LevelData` asset under `Assets/Dio/Levels/` (unique filename) and opens the editor on it. Use this to author additional tracks; **Default Level Asset only ever recreates `DefaultLevel.asset`**. |
 | `Tools → Dio → Open Level Editor` | Opens the orbit-and-edit window for whichever level is currently selected |
+
+### 11.4 Minimap (current placeholder + future render-texture)
+
+The race HUD's minimap is a static `hud_minimap.svg` (stylised globe) under the canvas. Good enough to ship, but the real version is:
+
+```
+[Top-down camera] ─ orthographic, parented over the local player
+        │           looking down toward the planet origin
+        ▼
+[RenderTexture] ─ a small (e.g. 256×256) texture asset
+        │
+        ▼
+[RawImage in canvas] ─ takes the place of today's hud_minimap SVG
+```
+
+Cars, pickups, and vegetation are intentionally **excluded from the camera's culling mask**. They become **UI markers** parented to the minimap RectTransform — short-lived `Image` children with `hud_player_marker.svg` etc., positioned by projecting world-space → minimap-local-space each frame. Reasons:
+
+- Vegetation in a top-down render is visual noise; UI labels are crisper.
+- Cars are tiny in the texture but readable as iconic UI markers.
+- Lets us color-code by player without per-car render layers.
+
+The scene builder already reserves a `Minimap` RectTransform with a `PlayerMarker` child; the future `MinimapController` swaps the SVG sprite on `Minimap` for a `RawImage` referencing the RenderTexture, then drives marker positions in `LateUpdate`.
 
 ## 12. Open questions
 

@@ -9,6 +9,8 @@ using UnityEngine.UI;
 using Dio.Net;
 using Dio.Level;
 using Dio.UI;
+using Dio.Common;
+using Dio.Powerups;
 
 namespace Dio.UI.EditorTools
 {
@@ -24,6 +26,29 @@ namespace Dio.UI.EditorTools
         const string MainScenePath = ScenesDir + "/Main.unity";
         const string LevelsDir = DioRoot + "/Levels";
         const string DefaultLevelPath = LevelsDir + "/DefaultLevel.asset";
+        const string SvgDir = DioRoot + "/UI/Svg";
+
+        [MenuItem("Tools/Dio/Build/Re-import SVGs")]
+        public static int ReimportSvgs()
+        {
+            int count = 0;
+            if (!Directory.Exists(SvgDir)) return 0;
+            foreach (var path in Directory.GetFiles(SvgDir, "*.svg"))
+            {
+                var assetPath = path.Replace('\\', '/');
+                AssetDatabase.ImportAsset(assetPath, ImportAssetOptions.ForceUpdate);
+                count++;
+            }
+            AssetDatabase.SaveAssets();
+            Debug.Log($"[Dio] Re-imported {count} SVG assets" + (SvgIconLoader.VectorGraphicsAvailable ? "" : " (com.unity.vectorgraphics not detected — they will import as plain assets without Sprite output)"));
+            return count;
+        }
+
+        static Sprite LoadSvg(string svgName)
+        {
+            var path = $"{SvgDir}/{svgName}.svg";
+            return AssetDatabase.LoadAssetAtPath<Sprite>(path);
+        }
 
         [MenuItem("Tools/Dio/Build/All (Player + NetMgr + Car + Powerups + Level + Main Scene)", priority = 0)]
         public static void BuildAll()
@@ -34,6 +59,7 @@ namespace Dio.UI.EditorTools
                 return;
             }
 
+            ReimportSvgs(); // ensure com.unity.vectorgraphics has processed every .svg before we look up sprites
             BuildPlayerPrefab();
             Dio.Player.EditorTools.CarPrefabBuilder.BuildCarPrefab();
             Dio.Powerups.EditorTools.PowerupPrefabBuilder.BuildAll();
@@ -166,19 +192,30 @@ namespace Dio.UI.EditorTools
             scaler.referenceResolution = new Vector2(1920, 1080);
             scaler.matchWidthOrHeight = 0.5f;
 
+            // ---- MenuRoot wraps every piece of menu UI so we can hide it as a
+            // single unit when the race starts. RaceHUDRoot (built below) is the
+            // sibling that takes over.
+            var menuRoot = AddPanel(canvasGo.transform, "MenuRoot", new Color(1, 1, 1, 0));
+            var menuRootRT = (RectTransform)menuRoot.transform;
+            menuRootRT.anchorMin = Vector2.zero; menuRootRT.anchorMax = Vector2.one;
+            menuRootRT.offsetMin = Vector2.zero; menuRootRT.offsetMax = Vector2.zero;
+            // The menu root's Image isn't drawn — kill its raycastTarget so it doesn't eat clicks.
+            var menuRootImg = menuRoot.GetComponent<Image>(); if (menuRootImg != null) menuRootImg.raycastTarget = false;
+
             // Background.
-            var bg = AddImage(canvasGo.transform, "BG", new Color(1.00f, 0.94f, 0.78f), stretch:true);
+            var bg = AddImage(menuRoot.transform, "BG", new Color(1.00f, 0.94f, 0.78f), stretch:true);
             bg.transform.SetSiblingIndex(0);
+            bg.raycastTarget = false;
 
             // Decorative corner accents. If the com.unity.vectorgraphics package is
             // installed and the SVG files in Assets/Dio/UI/Svg/ have been imported
-            // as Sprites, we use them directly; otherwise we fall back to flat
-            // colored rects with the brand colors.
-            AddCornerAccent(canvasGo.transform, new Color(0.95f, 0.61f, 0.16f, 1f), Vector2.up + Vector2.left,    "TopLeft",     "Flag");
-            AddCornerAccent(canvasGo.transform, new Color(0.36f, 0.72f, 0.37f, 1f), Vector2.right + Vector2.down, "BottomRight", "Planet");
+            // as Sprites, we use them directly via SVGImage; otherwise we fall
+            // back to flat colored rects with the brand colors.
+            AddCornerAccent(menuRoot.transform, new Color(0.95f, 0.61f, 0.16f, 1f), Vector2.up + Vector2.left,    "TopLeft",     "flag");
+            AddCornerAccent(menuRoot.transform, new Color(0.36f, 0.72f, 0.37f, 1f), Vector2.right + Vector2.down, "BottomRight", "planet");
 
             // ---- Top bar ----
-            var topBar = AddPanel(canvasGo.transform, "TopBar", new Color(1f, 1f, 1f, 0.85f));
+            var topBar = AddPanel(menuRoot.transform, "TopBar", new Color(1f, 1f, 1f, 0.85f));
             var topRT = (RectTransform)topBar.transform;
             topRT.anchorMin = new Vector2(0, 1); topRT.anchorMax = new Vector2(1, 1);
             topRT.pivot = new Vector2(0.5f, 1);
@@ -214,7 +251,7 @@ namespace Dio.UI.EditorTools
 
             // Scrim that locks the rest of the UI until a name is set.
             var scrimGo = new GameObject("NameLockScrim", typeof(RectTransform), typeof(Image), typeof(CanvasGroup));
-            scrimGo.transform.SetParent(canvasGo.transform, false);
+            scrimGo.transform.SetParent(menuRoot.transform, false);
             var srt = (RectTransform)scrimGo.transform;
             srt.anchorMin = Vector2.zero; srt.anchorMax = Vector2.one;
             srt.offsetMin = new Vector2(0, 0); srt.offsetMax = new Vector2(0, -96); // leave the top bar above
@@ -224,7 +261,7 @@ namespace Dio.UI.EditorTools
             scrimCg.blocksRaycasts = true;
 
             // ---- Idle panel (host / join) ----
-            var idle = AddPanel(canvasGo.transform, "IdlePanel", new Color(1, 1, 1, 0));
+            var idle = AddPanel(menuRoot.transform, "IdlePanel", new Color(1, 1, 1, 0));
             var irt = (RectTransform)idle.transform;
             irt.anchorMin = new Vector2(0.5f, 0.5f); irt.anchorMax = new Vector2(0.5f, 0.5f);
             irt.sizeDelta = new Vector2(560, 220);
@@ -232,11 +269,11 @@ namespace Dio.UI.EditorTools
             ihg.spacing = 24; ihg.childAlignment = TextAnchor.MiddleCenter;
             ihg.childControlWidth = false; ihg.childControlHeight = false;
 
-            var hostBtn = AddBigButton(idle.transform, "HostButton", "Host Game", new Color(0.95f, 0.61f, 0.16f, 1f));
-            var joinBtn = AddBigButton(idle.transform, "JoinButton", "Join Game", new Color(0.36f, 0.72f, 0.37f, 1f));
+            var hostBtn = AddBigButton(idle.transform, "HostButton", "Host Game", new Color(0.95f, 0.61f, 0.16f, 1f), "menu_host");
+            var joinBtn = AddBigButton(idle.transform, "JoinButton", "Join Game", new Color(0.36f, 0.72f, 0.37f, 1f), "menu_join");
 
             // ---- Browser panel ----
-            var browser = AddPanel(canvasGo.transform, "BrowserPanel", new Color(1, 1, 1, 0.95f));
+            var browser = AddPanel(menuRoot.transform, "BrowserPanel", new Color(1, 1, 1, 0.95f));
             var brt = (RectTransform)browser.transform;
             brt.anchorMin = new Vector2(0.5f, 0.5f); brt.anchorMax = new Vector2(0.5f, 0.5f);
             brt.sizeDelta = new Vector2(680, 520);
@@ -254,7 +291,7 @@ namespace Dio.UI.EditorTools
             var browserListLE = browserScroll.gameObject.AddComponent<LayoutElement>();
             browserListLE.flexibleHeight = 1; browserListLE.minHeight = 320;
 
-            var browserClose = AddBigButton(browser.transform, "CloseButton", "Cancel", new Color(0.85f, 0.32f, 0.24f, 1f));
+            var browserClose = AddBigButton(browser.transform, "CloseButton", "Cancel", new Color(0.85f, 0.32f, 0.24f, 1f), "menu_leave");
             ((RectTransform)browserClose.transform).sizeDelta = new Vector2(220, 56);
 
             // Server entry template (inactive).
@@ -274,7 +311,7 @@ namespace Dio.UI.EditorTools
             AddText(browserEntry.transform, "Subtitle", "Host · 0/8 · 0.0.0.0", 16, FontStyles.Normal);
 
             // ---- Lobby panel ----
-            var lobby = AddPanel(canvasGo.transform, "LobbyPanel", new Color(1, 1, 1, 0.95f));
+            var lobby = AddPanel(menuRoot.transform, "LobbyPanel", new Color(1, 1, 1, 0.95f));
             var lrt = (RectTransform)lobby.transform;
             lrt.anchorMin = new Vector2(0.5f, 0.5f); lrt.anchorMax = new Vector2(0.5f, 0.5f);
             lrt.sizeDelta = new Vector2(680, 600);
@@ -297,9 +334,9 @@ namespace Dio.UI.EditorTools
             lhg.childControlWidth = false; lhg.childControlHeight = false;
             ((RectTransform)lobbyButtonsRow.transform).sizeDelta = new Vector2(0, 64);
 
-            var leaveBtn = AddBigButton(lobbyButtonsRow.transform, "LeaveButton", "Leave", new Color(0.85f, 0.32f, 0.24f, 1f));
+            var leaveBtn = AddBigButton(lobbyButtonsRow.transform, "LeaveButton", "Leave", new Color(0.85f, 0.32f, 0.24f, 1f), "menu_leave");
             ((RectTransform)leaveBtn.transform).sizeDelta = new Vector2(180, 56);
-            var startBtn = AddBigButton(lobbyButtonsRow.transform, "StartButton", "Start Race", new Color(0.36f, 0.72f, 0.37f, 1f));
+            var startBtn = AddBigButton(lobbyButtonsRow.transform, "StartButton", "Start Race", new Color(0.36f, 0.72f, 0.37f, 1f), "menu_start");
             ((RectTransform)startBtn.transform).sizeDelta = new Vector2(260, 56);
 
             // Lobby entry template.
@@ -320,6 +357,115 @@ namespace Dio.UI.EditorTools
             colorChip.GetComponent<Image>().color = Color.white;
 
             AddText(lobbyEntry.transform, "Name", "Player Name", 22, FontStyles.Normal);
+
+            // ---- Race HUD root ----
+            // Hidden initially; MainMenuController shows it on race start.
+            var hudRoot = AddPanel(canvasGo.transform, "RaceHUDRoot", new Color(1, 1, 1, 0));
+            var hudRootRT = (RectTransform)hudRoot.transform;
+            hudRootRT.anchorMin = Vector2.zero; hudRootRT.anchorMax = Vector2.one;
+            hudRootRT.offsetMin = Vector2.zero; hudRootRT.offsetMax = Vector2.zero;
+            var hudRootImg = hudRoot.GetComponent<Image>(); if (hudRootImg != null) hudRootImg.raycastTarget = false;
+            hudRoot.SetActive(false);
+
+            // Minimap (top-left). Today: a static globe SVG. Future (plan §11.4):
+            // a RenderTexture from a top-down camera over the player; cars and
+            // pickups become UI markers parented to this transform so we can
+            // skip rendering them in the actual texture.
+            var minimapGo = new GameObject("Minimap", typeof(RectTransform));
+            minimapGo.transform.SetParent(hudRoot.transform, false);
+            var minimapRt = (RectTransform)minimapGo.transform;
+            minimapRt.anchorMin = new Vector2(0, 1); minimapRt.anchorMax = new Vector2(0, 1);
+            minimapRt.pivot = new Vector2(0, 1);
+            minimapRt.anchoredPosition = new Vector2(24, -24);
+            minimapRt.sizeDelta = new Vector2(220, 220);
+            SvgIconLoader.AttachIcon(minimapGo, LoadSvg("hud_minimap"), Color.white);
+
+            // Player marker as a child of the minimap. The future minimap
+            // controller will move this in screen space based on the player's
+            // surface position; for now it sits at the centre as a placeholder.
+            var markerGo = new GameObject("PlayerMarker", typeof(RectTransform));
+            markerGo.transform.SetParent(minimapGo.transform, false);
+            var markerRt = (RectTransform)markerGo.transform;
+            markerRt.anchorMin = new Vector2(0.5f, 0.5f);
+            markerRt.anchorMax = new Vector2(0.5f, 0.5f);
+            markerRt.sizeDelta = new Vector2(28, 28);
+            markerRt.anchoredPosition = Vector2.zero;
+            SvgIconLoader.AttachIcon(markerGo, LoadSvg("hud_player_marker"), Color.white);
+
+            // Powerup slot (bottom-left). Frame is the dashed "?" SVG; the icon
+            // sprite that overlays gets switched at runtime by RaceHUD.
+            var slotGo = new GameObject("PowerupSlot", typeof(RectTransform));
+            slotGo.transform.SetParent(hudRoot.transform, false);
+            var slotRt = (RectTransform)slotGo.transform;
+            slotRt.anchorMin = new Vector2(0, 0); slotRt.anchorMax = new Vector2(0, 0);
+            slotRt.pivot = new Vector2(0, 0);
+            slotRt.anchoredPosition = new Vector2(24, 24);
+            slotRt.sizeDelta = new Vector2(120, 120);
+            SvgIconLoader.AttachIcon(slotGo, LoadSvg("hud_powerup_box"), Color.white);
+
+            var slotIconGo = new GameObject("Icon", typeof(RectTransform), typeof(Image));
+            slotIconGo.transform.SetParent(slotGo.transform, false);
+            var slotIconRt = (RectTransform)slotIconGo.transform;
+            slotIconRt.anchorMin = Vector2.zero; slotIconRt.anchorMax = Vector2.one;
+            slotIconRt.offsetMin = new Vector2(14, 14); slotIconRt.offsetMax = new Vector2(-14, -14);
+            var slotIconImg = slotIconGo.GetComponent<Image>();
+            slotIconImg.preserveAspect = true;
+            slotIconImg.raycastTarget = false;
+            slotIconImg.enabled = false;
+
+            var chargeLabelGo = new GameObject("Charges", typeof(RectTransform));
+            chargeLabelGo.transform.SetParent(slotGo.transform, false);
+            var chargeRt = (RectTransform)chargeLabelGo.transform;
+            chargeRt.anchorMin = new Vector2(1, 0); chargeRt.anchorMax = new Vector2(1, 0);
+            chargeRt.pivot = new Vector2(1, 0);
+            chargeRt.anchoredPosition = new Vector2(-4, 4);
+            chargeRt.sizeDelta = new Vector2(60, 36);
+            var chargeLabel = chargeLabelGo.AddComponent<TextMeshProUGUI>();
+            chargeLabel.text = "";
+            chargeLabel.fontSize = 26; chargeLabel.fontStyle = FontStyles.Bold;
+            chargeLabel.color = Color.white;
+            chargeLabel.alignment = TextAlignmentOptions.BottomRight;
+            chargeLabel.font = TMP_Settings.defaultFontAsset;
+
+            // Speed (bottom-right). Gauge SVG + km/h readout.
+            var speedGo = new GameObject("Speed", typeof(RectTransform));
+            speedGo.transform.SetParent(hudRoot.transform, false);
+            var speedRt = (RectTransform)speedGo.transform;
+            speedRt.anchorMin = new Vector2(1, 0); speedRt.anchorMax = new Vector2(1, 0);
+            speedRt.pivot = new Vector2(1, 0);
+            speedRt.anchoredPosition = new Vector2(-24, 24);
+            speedRt.sizeDelta = new Vector2(280, 120);
+
+            var gaugeGo = new GameObject("Gauge", typeof(RectTransform));
+            gaugeGo.transform.SetParent(speedGo.transform, false);
+            var gaugeRt = (RectTransform)gaugeGo.transform;
+            gaugeRt.anchorMin = new Vector2(0, 0.5f); gaugeRt.anchorMax = new Vector2(0, 0.5f);
+            gaugeRt.pivot = new Vector2(0, 0.5f);
+            gaugeRt.sizeDelta = new Vector2(96, 96);
+            SvgIconLoader.AttachIcon(gaugeGo, LoadSvg("hud_speed"), Color.white);
+
+            var speedTextGo = new GameObject("Readout", typeof(RectTransform));
+            speedTextGo.transform.SetParent(speedGo.transform, false);
+            var speedTextRt = (RectTransform)speedTextGo.transform;
+            speedTextRt.anchorMin = new Vector2(1, 0); speedTextRt.anchorMax = new Vector2(1, 1);
+            speedTextRt.pivot = new Vector2(1, 0.5f);
+            speedTextRt.sizeDelta = new Vector2(170, 0);
+            speedTextRt.anchoredPosition = Vector2.zero;
+            var speedText = speedTextGo.AddComponent<TextMeshProUGUI>();
+            speedText.text = "0 km/h";
+            speedText.fontSize = 44; speedText.fontStyle = FontStyles.Bold;
+            speedText.color = Color.white;
+            speedText.alignment = TextAlignmentOptions.MidlineRight;
+            speedText.font = TMP_Settings.defaultFontAsset;
+
+            // RaceHUD component, wired with all the HUD refs + powerup icon map.
+            var hudCtrl = hudRoot.AddComponent<RaceHUD>();
+            hudCtrl.minimapRoot = minimapRt;
+            hudCtrl.minimapPlayerMarker = markerRt;
+            hudCtrl.powerupSlotIcon = slotIconImg;
+            hudCtrl.powerupChargeLabel = chargeLabel;
+            hudCtrl.speedLabel = speedText;
+            hudCtrl.iconEntries = BuildPowerupIconMap();
 
             // ---- Wire MainMenuController on a top-level controller GO ----
             var ctrlGo = new GameObject("MenuController");
@@ -343,7 +489,8 @@ namespace Dio.UI.EditorTools
             ctrl.leaveButton = leaveBtn;
             ctrl.net = netInstance.GetComponent<DioNetworkManager>();
             ctrl.discovery = netInstance.GetComponent<DioNetworkDiscovery>();
-            ctrl.mainCanvas = canvas;
+            ctrl.menuRoot = menuRoot;
+            ctrl.hudRoot = hudRoot;
 
             EditorSceneManager.SaveScene(scene, MainScenePath);
 
@@ -395,29 +542,16 @@ namespace Dio.UI.EditorTools
             return img;
         }
 
-        static void AddCornerAccent(Transform parent, Color color, Vector2 anchor, string name, string svgAssetName = null)
+        static void AddCornerAccent(Transform parent, Color fallbackColor, Vector2 anchor, string name, string svgAssetName)
         {
-            var go = new GameObject($"Accent_{name}", typeof(RectTransform), typeof(Image));
+            var go = new GameObject($"Accent_{name}", typeof(RectTransform));
             go.transform.SetParent(parent, false);
-            var img = go.GetComponent<Image>();
-            img.raycastTarget = false;
 
-            // Try the SVG-imported Sprite. Returns null if vectorgraphics package
-            // isn't installed (it imports .svg as a Sprite asset).
-            Sprite svgSprite = null;
-            if (!string.IsNullOrEmpty(svgAssetName))
-                svgSprite = AssetDatabase.LoadAssetAtPath<Sprite>($"Assets/Dio/UI/Svg/{svgAssetName}.svg");
-
-            if (svgSprite != null)
-            {
-                img.sprite = svgSprite;
-                img.color = Color.white;             // let the SVG's own colors show through
-                img.preserveAspect = true;
-            }
-            else
-            {
-                img.color = color;                   // fallback: flat color block
-            }
+            var sprite = LoadSvg(svgAssetName);
+            // SvgIconLoader picks SVGImage if vectorgraphics is installed (vector-quality);
+            // otherwise plain Image with the sprite (still raster-displays the SVG); if no
+            // sprite is available we get a flat-tinted rect with the brand color.
+            var graphic = SvgIconLoader.AttachIcon(go, sprite, sprite != null ? Color.white : fallbackColor);
 
             var rt = (RectTransform)go.transform;
             rt.anchorMin = new Vector2(Mathf.Clamp01(anchor.x), Mathf.Clamp01(anchor.y));
@@ -473,7 +607,7 @@ namespace Dio.UI.EditorTools
             return go;
         }
 
-        static Button AddBigButton(Transform parent, string name, string label, Color color)
+        static Button AddBigButton(Transform parent, string name, string label, Color color, string svgIconName = null)
         {
             var go = new GameObject(name, typeof(RectTransform), typeof(Image), typeof(Button));
             go.transform.SetParent(parent, false);
@@ -481,6 +615,7 @@ namespace Dio.UI.EditorTools
             img.color = color;
             ((RectTransform)go.transform).sizeDelta = new Vector2(240, 96);
 
+            // Label fills the button (centered).
             var t = AddText(go.transform, "Label", label, 30, FontStyles.Bold);
             t.alignment = TextAlignmentOptions.Center;
             t.color = Color.white;
@@ -488,7 +623,39 @@ namespace Dio.UI.EditorTools
             trt.anchorMin = Vector2.zero; trt.anchorMax = Vector2.one;
             trt.offsetMin = Vector2.zero; trt.offsetMax = Vector2.zero;
 
+            // Optional SVG icon at the left, anchored to the left edge.
+            if (!string.IsNullOrEmpty(svgIconName))
+            {
+                var iconGo = new GameObject("Icon", typeof(RectTransform));
+                iconGo.transform.SetParent(go.transform, false);
+                var irt = (RectTransform)iconGo.transform;
+                irt.anchorMin = new Vector2(0, 0.5f);
+                irt.anchorMax = new Vector2(0, 0.5f);
+                irt.pivot = new Vector2(0, 0.5f);
+                irt.sizeDelta = new Vector2(56, 56);
+                irt.anchoredPosition = new Vector2(16, 0);
+                SvgIconLoader.AttachIcon(iconGo, LoadSvg(svgIconName), Color.white);
+            }
+
             return go.GetComponent<Button>();
+        }
+
+        // Pulls the SVG sprite for each PowerupKind so the RaceHUD can swap them in.
+        static RaceHUD.PowerupIcon[] BuildPowerupIconMap()
+        {
+            return new[]
+            {
+                new RaceHUD.PowerupIcon { kind = PowerupKind.Boost,       icon = LoadSvg("powerup_boost") },
+                new RaceHUD.PowerupIcon { kind = PowerupKind.TripleBoost, icon = LoadSvg("powerup_boost") },
+                new RaceHUD.PowerupIcon { kind = PowerupKind.Star,        icon = LoadSvg("powerup_star") },
+                new RaceHUD.PowerupIcon { kind = PowerupKind.Lightning,   icon = LoadSvg("bolt") },
+                new RaceHUD.PowerupIcon { kind = PowerupKind.Banana,      icon = LoadSvg("powerup_banana") },
+                new RaceHUD.PowerupIcon { kind = PowerupKind.OilSlick,    icon = LoadSvg("powerup_oil") },
+                new RaceHUD.PowerupIcon { kind = PowerupKind.GreenShell,  icon = LoadSvg("powerup_shell") },
+                new RaceHUD.PowerupIcon { kind = PowerupKind.BlueShell,   icon = LoadSvg("powerup_blueshell") },
+                new RaceHUD.PowerupIcon { kind = PowerupKind.Bobomb,      icon = LoadSvg("powerup_bomb") },
+                new RaceHUD.PowerupIcon { kind = PowerupKind.Tornado,     icon = LoadSvg("powerup_tornado") },
+            };
         }
 
         static ScrollRect AddScrollView(Transform parent, string name, out RectTransform content)

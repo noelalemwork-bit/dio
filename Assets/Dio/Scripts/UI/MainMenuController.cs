@@ -43,9 +43,11 @@ namespace Dio.UI
         public DioNetworkManager net;
         public DioNetworkDiscovery discovery;
 
-        [Header("Hide on race start")]
-        [Tooltip("The canvas hosting all menu UI. Disabled when the race begins.")]
-        public Canvas mainCanvas;
+        [Header("Race-start swap")]
+        [Tooltip("Hidden when the race begins (top bar, idle, browser, lobby, scrim, accents).")]
+        public GameObject menuRoot;
+        [Tooltip("Shown when the race begins (minimap + powerup slot + speed).")]
+        public GameObject hudRoot;
 
         readonly Dictionary<long, DioDiscoveryResponse> _discoveredServers = new();
         readonly List<GameObject> _spawnedBrowserRows = new();
@@ -327,9 +329,9 @@ namespace Dio.UI
 
         void OnRaceStartedLocally(bool _, RaceStartMessage __)
         {
-            // Hide the whole canvas, not just this controller (which is a sibling).
-            if (mainCanvas != null) mainCanvas.gameObject.SetActive(false);
-            else gameObject.SetActive(false);
+            if (menuRoot != null) menuRoot.SetActive(false);
+            if (hudRoot != null) hudRoot.SetActive(true);
+            // No fallback that hides the whole canvas — we WANT the HUD visible.
         }
 
         static void ClearChildren(Transform root, List<GameObject> tracked)
