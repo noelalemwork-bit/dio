@@ -178,6 +178,27 @@ namespace Dio.UI.EditorTools
             var lvl = AssetDatabase.LoadAssetAtPath<LevelData>("Assets/Dio/Levels/DefaultLevel.asset");
             if (lvl != null) mgr.defaultLevel = lvl;
 
+            // Populate spawnPrefabs so base NetworkManager.OnStartClient auto-registers
+            // every networked prefab. Without this, server-spawned cars / obstacles
+            // arrive at clients with no prefab to instantiate and Mirror logs
+            // "Did not find target for sync message" warnings.
+            mgr.spawnPrefabs.Clear();
+            if (car != null) mgr.spawnPrefabs.Add(car);
+            string[] puPaths = {
+                "Assets/Dio/Prefabs/Powerups/Banana.prefab",
+                "Assets/Dio/Prefabs/Powerups/OilSlick.prefab",
+                "Assets/Dio/Prefabs/Powerups/GreenShell.prefab",
+                "Assets/Dio/Prefabs/Powerups/BlueShell.prefab",
+                "Assets/Dio/Prefabs/Powerups/Bobomb.prefab",
+                "Assets/Dio/Prefabs/Powerups/Tornado.prefab",
+                "Assets/Dio/Prefabs/Powerups/PowerupBox.prefab",
+            };
+            foreach (var p in puPaths)
+            {
+                var pu = AssetDatabase.LoadAssetAtPath<GameObject>(p);
+                if (pu != null) mgr.spawnPrefabs.Add(pu);
+            }
+
             var prefab = PrefabUtility.SaveAsPrefabAsset(go, NetMgrPrefabPath);
             Object.DestroyImmediate(go);
             Debug.Log($"[Dio] Built network manager prefab at {NetMgrPrefabPath}");

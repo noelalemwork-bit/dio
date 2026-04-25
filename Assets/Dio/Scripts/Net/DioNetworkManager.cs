@@ -46,25 +46,26 @@ namespace Dio.Net
         public override void OnStartServer()
         {
             base.OnStartServer();
-
-            // Register all networked spawnable prefabs (powerup boxes, obstacles).
-            var bootstrap = FindAnyObjectByType<Dio.Powerups.PowerupBootstrap>();
-            if (bootstrap != null)
-            {
-                foreach (var go in bootstrap.AllNetworkedPrefabs)
-                {
-                    if (go != null && !NetworkClient.prefabs.ContainsValue(go))
-                        NetworkClient.RegisterPrefab(go);
-                }
-            }
+            RegisterAllNetworkedPrefabs();
         }
 
         public override void OnStartClient()
         {
             base.OnStartClient();
             NetworkClient.ReplaceHandler<RaceStartMessage>(OnClientRaceStart);
+            RegisterAllNetworkedPrefabs();
+        }
 
-            // Same registration on the client so it can spawn obstacles/powerups.
+        // base.OnStartClient already registers playerPrefab + spawnPrefabs, but
+        // we add carPrefab and the powerup prefabs explicitly too, in case they
+        // weren't wired into spawnPrefabs (older scenes, manual setup, hot-
+        // reload edge cases). NetworkClient.RegisterPrefab is idempotent — if
+        // the prefab's already there it just no-ops.
+        void RegisterAllNetworkedPrefabs()
+        {
+            if (carPrefab != null && !NetworkClient.prefabs.ContainsValue(carPrefab))
+                NetworkClient.RegisterPrefab(carPrefab);
+
             var bootstrap = FindAnyObjectByType<Dio.Powerups.PowerupBootstrap>();
             if (bootstrap != null)
             {
