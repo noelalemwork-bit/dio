@@ -221,6 +221,10 @@ namespace Dio.UI.EditorTools
             sun.shadows = LightShadows.Soft;
             sunGo.transform.rotation = Quaternion.Euler(12f, 30f, 0f);
 
+            // Runtime binder that keeps the skybox's _PlayerUp aligned with the
+            // local player's surface normal as they drive around the planet.
+            sunGo.AddComponent<Dio.Common.SkyboxPlayerUpBinder>();
+
             // Sunset skybox.
             var skyMat = BuildSkyboxMaterial();
             if (skyMat != null)
@@ -365,6 +369,26 @@ namespace Dio.UI.EditorTools
             var browserScroll = AddScrollView(browser.transform, "ServerList", out RectTransform browserContent);
             var browserListLE = browserScroll.gameObject.AddComponent<LayoutElement>();
             browserListLE.flexibleHeight = 1; browserListLE.minHeight = 320;
+
+            // Direct-IP fallback row: when LAN discovery is blocked (Windows firewall,
+            // weird router, same-machine testing), users can punch in an IP directly.
+            var directRow = new GameObject("DirectConnectRow", typeof(RectTransform));
+            directRow.transform.SetParent(browser.transform, false);
+            ((RectTransform)directRow.transform).sizeDelta = new Vector2(0, 64);
+            var drhg = directRow.AddComponent<HorizontalLayoutGroup>();
+            drhg.spacing = 10; drhg.childAlignment = TextAnchor.MiddleLeft;
+            drhg.childControlWidth = false; drhg.childControlHeight = true;
+
+            var directLabel = AddText(directRow.transform, "Label", "Or direct IP:", 18, FontStyles.Italic);
+            ((RectTransform)directLabel.transform).sizeDelta = new Vector2(140, 56);
+
+            var ipFieldGo = AddInputField(directRow.transform, "IPField", "192.168.1.x");
+            ((RectTransform)ipFieldGo.transform).sizeDelta = new Vector2(280, 56);
+            var ipField = ipFieldGo.GetComponent<TMP_InputField>();
+            ipField.lineType = TMP_InputField.LineType.SingleLine;
+
+            var directConnectBtn = AddBigButton(directRow.transform, "DirectConnect", "Connect", new Color(0.36f, 0.72f, 0.37f, 1f), "menu_join");
+            ((RectTransform)directConnectBtn.transform).sizeDelta = new Vector2(180, 56);
 
             var browserClose = AddBigButton(browser.transform, "CloseButton", "Cancel", new Color(0.85f, 0.32f, 0.24f, 1f), "menu_leave");
             ((RectTransform)browserClose.transform).sizeDelta = new Vector2(220, 56);
@@ -604,6 +628,8 @@ namespace Dio.UI.EditorTools
             ctrl.browserEntryTemplate = browserEntry;
             ctrl.browserCloseButton = browserClose;
             ctrl.browserStatusLabel = browserStatus;
+            ctrl.directIpField = ipField;
+            ctrl.directConnectButton = directConnectBtn;
             ctrl.lobbyPanel = lobby;
             ctrl.lobbyTitle = lobbyTitle;
             ctrl.lobbyListRoot = lobbyContent;

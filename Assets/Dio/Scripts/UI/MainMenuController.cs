@@ -31,6 +31,10 @@ namespace Dio.UI
         public Button browserCloseButton;
         public TMP_Text browserStatusLabel;
 
+        [Header("Browser — direct IP fallback")]
+        public TMP_InputField directIpField;
+        public Button directConnectButton;
+
         [Header("Lobby")]
         public GameObject lobbyPanel;
         public TMP_Text lobbyTitle;
@@ -86,6 +90,7 @@ namespace Dio.UI
             hostButton.onClick.AddListener(OnHostClicked);
             joinButton.onClick.AddListener(OnJoinClicked);
             browserCloseButton.onClick.AddListener(() => browserPanel.SetActive(false));
+            if (directConnectButton != null) directConnectButton.onClick.AddListener(OnDirectConnectClicked);
             startButton.onClick.AddListener(OnStartClicked);
             leaveButton.onClick.AddListener(OnLeaveClicked);
 
@@ -245,6 +250,28 @@ namespace Dio.UI
         {
             if (discovery != null) discovery.StopDiscovery();
             net.StartClient(info.uri);
+            browserPanel.SetActive(false);
+            ShowLobby();
+        }
+
+        void OnDirectConnectClicked()
+        {
+            if (directIpField == null || net == null) return;
+            string ip = directIpField.text.Trim();
+            if (string.IsNullOrEmpty(ip)) { browserStatusLabel.text = "Enter an IP first."; return; }
+
+            // Pull the host's listening port off the active transport's ServerUri.
+            // KCP defaults to 7777; users can override by editing the transport asset.
+            int port = 7777;
+            if (Mirror.Transport.active != null)
+            {
+                try { port = Mirror.Transport.active.ServerUri().Port; } catch { /* default 7777 */ }
+            }
+
+            var uri = new System.Uri($"kcp://{ip}:{port}");
+            if (discovery != null) discovery.StopDiscovery();
+            net.networkAddress = ip;
+            net.StartClient(uri);
             browserPanel.SetActive(false);
             ShowLobby();
         }

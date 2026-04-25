@@ -38,6 +38,7 @@ Material:
     - _ColorBottom: {r: 1, g: 0.55, b: 0.2, a: 1}
     - _ColorMid: {r: 0.95, g: 0.32, b: 0.3, a: 1}
     - _ColorTop: {r: 0.3, g: 0.12, b: 0.45, a: 1}
+    - _PlayerUp: {r: 0, g: 1, b: 0, a: 0}
     - _SunColor: {r: 1, g: 0.92, b: 0.7, a: 1}
     - _SunDir: {r: -0.28317013, g: 0.16990207, b: 0.9439004, a: 0}
   m_BuildTextureStacks: []

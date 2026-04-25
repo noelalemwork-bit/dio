@@ -7,6 +7,12 @@ Shader "Dio/SunsetSky"
         _ColorTop    ("Top (zenith)",     Color) = (0.30, 0.12, 0.45, 1)
         _MidPoint    ("Mid Stop", Range(0, 1)) = 0.45
 
+        // The "up" direction the gradient and cloud horizon are aligned to.
+        // On a flat world this is (0,1,0); on the spherical world it's the
+        // unit vector from planet origin to the player. SkyboxPlayerUpBinder
+        // pushes this every frame.
+        _PlayerUp ("Player Up", Vector) = (0, 1, 0, 0)
+
         _SunDir   ("Sun Direction (xyz)", Vector) = (-0.30, 0.18, 1.00, 0)
         _SunColor ("Sun Color",  Color) = (1.0, 0.92, 0.70, 1)
         _SunSize  ("Sun Disc Size", Range(0, 0.2)) = 0.04
@@ -47,6 +53,7 @@ Shader "Dio/SunsetSky"
                 float4 _ColorMid;
                 float4 _ColorTop;
                 float  _MidPoint;
+                float4 _PlayerUp;
                 float4 _SunDir;
                 float4 _SunColor;
                 float  _SunSize;
@@ -105,33 +112,45 @@ Shader "Dio/SunsetSky"
             {
                 float3 dir = normalize(IN.dir);
 
-                // Three-stop vertical gradient. y in [-1..1], remap to [0..1].
-                float h = saturate(dir.y * 0.5 + 0.5);
+                // Spherical-world horizon: gradient is along the player's surface
+                // normal, not world-Y. _PlayerUp is set at runtime from
+                // (playerPos - planetOrigin).normalized; falls back to Y up if
+                // the binder hasn't pushed yet.
+                float3 up = _PlayerUp.xyz;
+                if (dot(up, up) < 0.0001) up = float3(0, 1, 0);
+                up = normalize(up);
+                float upDot = dot(dir, up);
+
+                // Three-stop gradient. upDot in [-1..1] → h in [0..1].
+                float h = saturate(upDot * 0.5 + 0.5);
                 float lo = smoothstep(0.0, _MidPoint, h);
                 float hi = smoothstep(_MidPoint, 1.0, h);
                 half3 sky = lerp(_ColorBottom.rgb, _ColorMid.rgb, lo);
                 sky = lerp(sky, _ColorTop.rgb, hi);
 
-                // Sun disc + soft halo.
+                // Sun disc + soft halo. Sun is a fixed world-space direction —
+                // it appears in different parts of the player's sky depending on
+                // where they are on the planet, which is the desired behaviour.
                 float3 sunDir = normalize(_SunDir.xyz);
                 float sunDot = saturate(dot(dir, sunDir));
                 float disc = smoothstep(1.0 - _SunSize, 1.0 - _SunSize * 0.5, sunDot);
                 float halo = pow(sunDot, _SunHaloPower) * 0.55;
                 sky += _SunColor.rgb * (disc + halo);
 
-                // Procedural clouds. Sample fbm at "infinity-plane" uv = dir.xz / dir.y.
-                // Only above the horizon; fade in over a small band so there's no hard line.
-                float skyMask = smoothstep(0.0, 0.18, dir.y);
-                float2 cloudUV = dir.xz / max(0.08, dir.y);
-                cloudUV = cloudUV * _CloudScale + _Time.y * _CloudSpeed;
-                float n  = fbm(float3(cloudUV, 0));
-                float ns = fbm(float3(cloudUV * 0.5 + 13.0, 0)); // second octave for shadow inside clouds
+                // Clouds — sample fbm in 3D *direction* space rather than projecting
+                // onto a horizontal plane. World-stable, no singularity at the
+                // pole, no basis-flip glitches when the player crosses an axis.
+                // Fade out near the player's horizon.
+                float skyMask = smoothstep(0.0, 0.18, upDot);
+                float3 cloudPos = dir * _CloudScale;
+                cloudPos += float3(_Time.y * _CloudSpeed, _Time.y * _CloudSpeed * 0.6, 0);
+                float n  = fbm(cloudPos);
+                float ns = fbm(cloudPos * 0.5 + 13.0); // second octave for inside-cloud shadow
                 float cmask = smoothstep(_CloudCoverage - 0.08, _CloudCoverage + 0.18, n);
                 cmask *= skyMask;
 
                 half3 cloudCol = lerp(_CloudShadow.rgb, _CloudColor.rgb, smoothstep(0.4, 0.8, ns));
-                // Sun-side clouds catch a warm rim.
-                cloudCol += _SunColor.rgb * pow(saturate(dot(dir, sunDir)), 4.0) * 0.18;
+                cloudCol += _SunColor.rgb * pow(sunDot, 4.0) * 0.18; // warm sun-side rim
 
                 sky = lerp(sky, cloudCol, cmask * _CloudDensity);
 
