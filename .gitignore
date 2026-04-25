@@ -76,3 +76,11 @@ Thumbs.db
 # Claude / agent state
 .claude/
 memory/
+
+# Vendored third-party assets — fetched/installed separately, not committed
+Assets/Mirror/
+Assets/Mirror.meta
+Assets/Plugins/NuGet/
+Assets/Plugins/NuGet.meta
+Assets/TutorialInfo/
+Assets/TutorialInfo.meta
