@@ -95,3 +95,8 @@ Assets/Dio/Prefabs/
 Assets/Dio/Prefabs.meta
 Assets/Dio/Scenes/Main.unity
 Assets/Dio/Scenes/Main.unity.meta
+
+# Unity's autosave / crash-recovery dump — regenerated whenever there are
+# unsaved scene changes; never relevant in the repo.
+Assets/_Recovery/
+Assets/_Recovery.meta
