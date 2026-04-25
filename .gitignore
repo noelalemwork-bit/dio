@@ -109,3 +109,7 @@ Packages/packages-lock.json
 
 # Local Unity metadata
 *.meta
+
+# Local Unity machine/version settings
+Assets/Settings/UniversalRenderPipelineGlobalSettings.asset
+ProjectSettings/ProjectVersion.txt
