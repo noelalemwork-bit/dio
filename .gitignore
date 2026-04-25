@@ -103,9 +103,10 @@ Assets/Dio/Scenes/Main.unity.meta
 Assets/_Recovery/
 Assets/_Recovery.meta
 
-# Local package metadata
+# Local package metadata + any embedded packages (e.g. com.unity.vectorgraphics)
 Packages/manifest.json
 Packages/packages-lock.json
+Packages/*/
 
 # Local Unity metadata
 *.meta
