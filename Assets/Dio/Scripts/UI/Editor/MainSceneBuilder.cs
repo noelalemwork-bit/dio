@@ -28,6 +28,12 @@ namespace Dio.UI.EditorTools
         [MenuItem("Tools/Dio/Build/All (Player + NetMgr + Car + Powerups + Level + Main Scene)", priority = 0)]
         public static void BuildAll()
         {
+            if (TMP_Settings.defaultFontAsset == null)
+            {
+                Debug.LogError("[Dio] TMP Essential Resources missing. Window > TextMeshPro > Import TMP Essential Resources, then re-run Build.");
+                return;
+            }
+
             BuildPlayerPrefab();
             Dio.Player.EditorTools.CarPrefabBuilder.BuildCarPrefab();
             Dio.Powerups.EditorTools.PowerupPrefabBuilder.BuildAll();
@@ -105,6 +111,12 @@ namespace Dio.UI.EditorTools
         [MenuItem("Tools/Dio/Build/Main Scene")]
         public static void BuildMainScene()
         {
+            if (TMP_Settings.defaultFontAsset == null)
+            {
+                Debug.LogError("[Dio] TMP Essential Resources missing. Window > TextMeshPro > Import TMP Essential Resources, then re-run Build.");
+                return;
+            }
+
             EnsureDir(ScenesDir);
 
             // Make sure prefabs exist + are up to date.
@@ -403,6 +415,7 @@ namespace Dio.UI.EditorTools
             t.text = text; t.fontSize = size; t.fontStyle = style;
             t.color = new Color(0.12f, 0.12f, 0.14f, 1f);
             t.alignment = TextAlignmentOptions.MidlineLeft;
+            t.font = TMP_Settings.defaultFontAsset;
             return t;
         }
 

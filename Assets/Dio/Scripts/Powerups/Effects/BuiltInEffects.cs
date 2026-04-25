@@ -142,7 +142,7 @@ namespace Dio.Powerups.Effects
             if (t != null)
             {
                 t.circleCenterDir = pos.normalized;
-                var planetGo = GameObject.FindWithTag("Planet");
+                var planetGo = Dio.Level.RaceBootstrap.CurrentPlanet;
                 if (planetGo != null) t.planet = planetGo.transform;
             }
             var ob = go.GetComponent<Obstacle>();

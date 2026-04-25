@@ -15,11 +15,19 @@ namespace Dio.Powerups.EditorTools
     public static class PowerupPrefabBuilder
     {
         const string PrefabsDir = "Assets/Dio/Prefabs/Powerups";
+        const string MaterialsDir = "Assets/Dio/Prefabs/Powerups/Materials";
 
         [MenuItem("Tools/Dio/Build/Powerup Prefabs")]
         public static void BuildAll()
         {
+            if (TMP_Settings.defaultFontAsset == null)
+            {
+                Debug.LogError("[Dio] TMP Essential Resources missing. Window > TextMeshPro > Import TMP Essential Resources, then re-run Build.");
+                return;
+            }
+
             EnsureDir(PrefabsDir);
+            EnsureDir(MaterialsDir);
 
             BuildBox();
 
@@ -34,16 +42,39 @@ namespace Dio.Powerups.EditorTools
             Debug.Log("[Dio] Built powerup prefabs.");
         }
 
+        /// Get-or-create a saved Material asset with the given color. Avoids
+        /// the "instantiating material in edit mode" warning by going through
+        /// `sharedMaterial` and saving the result as a real .mat asset.
+        static Material GetOrCreateColoredMat(string materialName, Color color)
+        {
+            EnsureDir(MaterialsDir);
+            string path = $"{MaterialsDir}/{materialName}.mat";
+            var mat = AssetDatabase.LoadAssetAtPath<Material>(path);
+            if (mat == null)
+            {
+                Shader sh = Shader.Find("Universal Render Pipeline/Lit")
+                         ?? Shader.Find("Standard");
+                mat = new Material(sh);
+                mat.color = color;
+                AssetDatabase.CreateAsset(mat, path);
+            }
+            else if (mat.color != color)
+            {
+                mat.color = color;
+                EditorUtility.SetDirty(mat);
+            }
+            return mat;
+        }
+
         static GameObject NewSphere(string name, Color color, float radius, bool isTrigger)
         {
             var go = GameObject.CreatePrimitive(PrimitiveType.Sphere);
             go.name = name;
             go.transform.localScale = Vector3.one * radius * 2f;
             var r = go.GetComponent<Renderer>();
-            if (r != null) r.material.color = color;
+            if (r != null) r.sharedMaterial = GetOrCreateColoredMat("PU_" + name, color);
             var col = go.GetComponent<SphereCollider>();
             col.isTrigger = isTrigger;
-            // Reset radius to 0.5 because primitive sphere has radius 0.5 in local space.
             col.radius = 0.5f;
             return go;
         }
@@ -58,7 +89,7 @@ namespace Dio.Powerups.EditorTools
             tmp.alignment = TextAlignmentOptions.Center;
             tmp.fontSize = 4f;
             tmp.color = Color.white;
-            // Face camera at runtime — quick billboard via a tiny helper.
+            tmp.font = TMP_Settings.defaultFontAsset; // explicit, in case TMP defaults aren't initialized yet
             go.AddComponent<Dio.Common.Billboard>();
         }
 
@@ -108,7 +139,7 @@ namespace Dio.Powerups.EditorTools
             go.name = "OilSlick";
             go.transform.localScale = new Vector3(4f, 0.05f, 4f);
             var r = go.GetComponent<Renderer>();
-            if (r != null) r.material.color = new Color(0.06f, 0.06f, 0.08f, 1f);
+            if (r != null) r.sharedMaterial = GetOrCreateColoredMat("PU_OilSlick", new Color(0.06f, 0.06f, 0.08f, 1f));
             var col = go.GetComponent<CapsuleCollider>();
             // Replace capsule with a flat box trigger.
             Object.DestroyImmediate(col);
@@ -172,7 +203,7 @@ namespace Dio.Powerups.EditorTools
             go.name = "Tornado";
             go.transform.localScale = new Vector3(4f, 6f, 4f);
             var r = go.GetComponent<Renderer>();
-            if (r != null) r.material.color = new Color(0.7f, 0.85f, 0.95f, 0.6f);
+            if (r != null) r.sharedMaterial = GetOrCreateColoredMat("PU_Tornado", new Color(0.7f, 0.85f, 0.95f, 0.6f));
             var col = go.GetComponent<CapsuleCollider>();
             // Convert to trigger.
             col.isTrigger = true;

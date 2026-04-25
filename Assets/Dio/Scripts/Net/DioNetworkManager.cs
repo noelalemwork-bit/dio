@@ -119,6 +119,12 @@ namespace Dio.Net
                 startServerTime = NetworkTime.time + 1.0,
             };
 
+            // Build the server-side planet FIRST so newly-spawned cars can find it
+            // in their Awake. Otherwise SphericalGravity has nothing to fall back to.
+            var bootstrap = FindAnyObjectByType<Dio.Level.RaceBootstrap>();
+            if (bootstrap != null && defaultLevel != null)
+                bootstrap.BuildVisualScene(defaultLevel);
+
             // Server-side spawning of cars. Client-side bootstrap (planet, camera)
             // is triggered via OnRaceStarted, which fires from the message handler.
             ServerSpawnCarsForAllPlayers();

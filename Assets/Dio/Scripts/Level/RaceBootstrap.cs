@@ -11,6 +11,10 @@ namespace Dio.Level
     /// itself is server-spawned by DioNetworkManager.
     public class RaceBootstrap : MonoBehaviour
     {
+        /// Set whenever any RaceBootstrap finishes EnsurePlanet. SphericalGravity
+        /// uses this for lookup so we don't depend on an unregistered "Planet" tag.
+        public static GameObject CurrentPlanet { get; private set; }
+
         [Tooltip("Default level used if no race-start message has been received yet.")]
         public LevelData defaultLevel;
 
@@ -73,14 +77,15 @@ namespace Dio.Level
 
         void EnsurePlanet(float radius)
         {
-            if (_planet != null) return;
+            if (_planet != null) { CurrentPlanet = _planet; return; }
             _planet = GameObject.CreatePrimitive(PrimitiveType.Sphere);
             _planet.name = "Planet";
-            _planet.tag = "Planet";
+            // No tag — we don't depend on Unity's TagManager. Lookup goes via CurrentPlanet.
             _planet.transform.position = Vector3.zero;
             _planet.transform.localScale = Vector3.one * radius * 2f;
             var rend = _planet.GetComponent<Renderer>();
             if (rend != null) rend.material.color = new Color(0.42f, 0.65f, 0.42f, 1f);
+            CurrentPlanet = _planet;
         }
 
         void EnsureTrackLine(LevelData level)
