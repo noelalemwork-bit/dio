@@ -156,10 +156,12 @@ namespace Dio.Player
             float spinDeltaDeg = (fwdSpeed / Mathf.Max(0.01f, _wheelRadiusCached)) * Mathf.Rad2Deg * dt;
             _spinAngleDeg = (_spinAngleDeg + spinDeltaDeg) % 360f;
 
-            // Steer source: server's controller writes _currentSteer + DioCar.steerAngle SyncVar;
-            // remote clients only have the SyncVar. Prefer the SyncVar when available so all
-            // peers see the same value — otherwise fall back to the local controller's value.
-            float steerDeg = _dioCar != null ? _dioCar.steerAngle : _currentSteer;
+            // Steer is local-only: the owner's controller writes `_currentSteer`
+            // from their inputs (full physics), the host's controller writes it
+            // for their own car, and remote peers leave it at 0 (their kinematic
+            // car has no live controller). Visual fidelity loss on remote cars'
+            // front-wheel steering is acceptable; chassis rotation tells the story.
+            float steerDeg = _currentSteer;
 
             ApplyWheelLocalRotation(frontAxle, _spinAngleDeg, steerDeg);
             ApplyWheelLocalRotation(rearAxle, _spinAngleDeg, 0f);
@@ -213,6 +215,12 @@ namespace Dio.Player
 
         void FixedUpdate()
         {
+            // Skip the entire physics-application path on a kinematic body
+            // (server's view + remote clients). WheelCollider torque writes on
+            // a kinematic rigidbody throw "WheelCollider on kinematic body"
+            // warnings in some Unity versions and are pure waste.
+            if (_rb.isKinematic) return;
+
             if (readLocalInput) currentInputs = ReadLocalInputsNow();
             if (inputsLocked) currentInputs = default;
 

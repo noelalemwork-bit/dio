@@ -100,6 +100,100 @@ namespace Dio.Level
             return mesh;
         }
 
+        /// Build a pair of vertical guard-rail meshes along each side of the
+        /// track, anchored to the planet surface. The walls extend slightly
+        /// outward (so a car edging onto the boundary collides with the wall
+        /// instead of the track ribbon's vertex), `height` upward (so cars
+        /// can't slip over the top under a bump), and `skirtDepth` downward
+        /// (so the bottom edge sits below the surface mesh — closes any tiny
+        /// crack between the track ribbon and the planet sphere where a car
+        /// might pop through).
+        ///
+        /// Triangle winding faces inward (toward the track center): one mesh
+        /// per side because the outward normal differs.
+        public static (Mesh left, Mesh right) BuildGuards(LevelData level,
+            float height = 2.5f, float outwardOffset = 0.1f, float skirtDepth = 3f)
+        {
+            if (level == null || !level.HasMinimum) return (null, null);
+            float r = level.planetRadius;
+            float halfW = level.trackWidth * 0.5f;
+
+            var leftVerts  = new List<Vector3>();
+            var leftTris   = new List<int>();
+            var rightVerts = new List<Vector3>();
+            var rightTris  = new List<int>();
+
+            for (int arc = 0; arc < level.points.Count - 1; arc++)
+            {
+                Vector3 a = level.points[arc].directionFromCenter.normalized;
+                Vector3 b = level.points[arc + 1].directionFromCenter.normalized;
+                bool isLastArc = arc == level.points.Count - 2;
+                int sampleCount = isLastArc ? SegmentsPerArc + 1 : SegmentsPerArc;
+
+                for (int s = 0; s < sampleCount; s++)
+                {
+                    float t = (float)s / SegmentsPerArc;
+                    Vector3 dir = Vector3.Slerp(a, b, t).normalized;
+                    Vector3 dirAhead = Vector3.Slerp(a, b, Mathf.Min(1f, t + DerivEpsilon)).normalized;
+                    Vector3 tangent = (dirAhead - dir).normalized;
+                    if (tangent.sqrMagnitude < 1e-6f) tangent = GeodesicUtil.TangentAt(a, b);
+
+                    Vector3 normal = dir;
+                    Vector3 width = Vector3.Cross(tangent, normal).normalized; // points "left" (positive width)
+
+                    // Right edge of the track is at center - width * halfW (we used `width` as left in TrackBuilder.Build).
+                    Vector3 leftEdgeCenter  = dir * r + width * (halfW + outwardOffset);
+                    Vector3 rightEdgeCenter = dir * r - width * (halfW + outwardOffset);
+
+                    // Top + bottom along the local surface normal `dir`.
+                    Vector3 leftTop    = leftEdgeCenter  + dir * height;
+                    Vector3 leftBot    = leftEdgeCenter  - dir * skirtDepth;
+                    Vector3 rightTop   = rightEdgeCenter + dir * height;
+                    Vector3 rightBot   = rightEdgeCenter - dir * skirtDepth;
+
+                    leftVerts.Add(leftBot); leftVerts.Add(leftTop);
+                    rightVerts.Add(rightBot); rightVerts.Add(rightTop);
+
+                    if (s > 0)
+                    {
+                        // Two quads per segment, wound so faces point INWARD
+                        // (toward the track center): cars on the track see a
+                        // wall, cars off-track see only the back side.
+                        // Left wall's outward direction is +width, so inward
+                        // = -width: triangles wound CW from the inside view.
+                        int li = leftVerts.Count - 4; // L0bot, L0top, L1bot, L1top
+                        leftTris.Add(li + 0); leftTris.Add(li + 1); leftTris.Add(li + 2);
+                        leftTris.Add(li + 1); leftTris.Add(li + 3); leftTris.Add(li + 2);
+
+                        int ri = rightVerts.Count - 4;
+                        // Right wall's outward = -width, so inward = +width:
+                        // wind the opposite way to face the track.
+                        rightTris.Add(ri + 0); rightTris.Add(ri + 2); rightTris.Add(ri + 1);
+                        rightTris.Add(ri + 1); rightTris.Add(ri + 2); rightTris.Add(ri + 3);
+                    }
+                }
+            }
+
+            Mesh BuildMesh(string n, List<Vector3> verts, List<int> tris)
+            {
+                var m = new Mesh
+                {
+                    name = n,
+                    indexFormat = verts.Count > 65000
+                        ? UnityEngine.Rendering.IndexFormat.UInt32
+                        : UnityEngine.Rendering.IndexFormat.UInt16,
+                };
+                m.SetVertices(verts);
+                m.SetTriangles(tris, 0);
+                m.RecalculateNormals();
+                m.RecalculateBounds();
+                return m;
+            }
+
+            return (BuildMesh("DioGuardLeft", leftVerts, leftTris),
+                    BuildMesh("DioGuardRight", rightVerts, rightTris));
+        }
+
         /// World position at parametric distance t in [0..1] along the entire
         /// chain. Used by powerup spawning to find the midpoint.
         public static Vector3 SampleAt(LevelData level, float t)

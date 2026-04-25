@@ -5,12 +5,28 @@ using Dio.Net;
 
 namespace Dio.Player
 {
-    /// Networked car. Input flows: local player → Cmd → server → physics
-    /// → NetworkTransform → all clients (visual interpolation).
+    /// Networked car. **Client-authority physics** for the local owner:
+    /// each peer fully simulates its OWN car (zero local input lag), pushes
+    /// position+rotation to the server, server relays to other peers.
     ///
-    /// Authority: server-only. Local player never moves the rigidbody directly
-    /// in the M1 milestone; predicted-rigidbody is the M3 upgrade path
-    /// (see plan.md §4.3 Phase B).
+    /// Why: this is a LAN racing game. The server-authoritative round-trip
+    /// (Cmd → server sim → NetworkTransform back) added an entire RTT of
+    /// input lag for joined players, and on the user's tests the joined
+    /// player's car wasn't accelerating at all (only steering visuals fired).
+    /// Client authority is the simplest path to "perfect physics, no latency"
+    /// per the project's stated goals; no anti-cheat needed for LAN.
+    ///
+    /// Authority matrix:
+    ///   - HOST (isServer && isOwned): full physics locally; NetworkTransform
+    ///     pushes its state to other clients (ClientToServer dir, but host
+    ///     IS the server, so this is a single hop to other clients).
+    ///   - REMOTE OWNER (!isServer && isOwned): full physics locally;
+    ///     NetworkTransform sends state to server, which relays to peers.
+    ///   - PEER (!isOwned): kinematic; NetworkTransform interpolation drives
+    ///     the visible position. No controller simulation.
+    ///   - DEDICATED SERVER's view of any car: kinematic; transform updated
+    ///     by the owner's NetworkTransform writes. Server still owns triggers
+    ///     (powerup boxes, win detection, etc).
     [RequireComponent(typeof(NetworkIdentity))]
     [RequireComponent(typeof(Rigidbody))]
     [RequireComponent(typeof(ArcadeCarController))]
@@ -21,30 +37,15 @@ namespace Dio.Player
         [SyncVar(hook = nameof(OnColorChanged))] public int colorIndex;
         [SyncVar] public string ownerName = "";
 
-        // Server-set each FixedUpdate from the controller; clients read this to
-        // animate the front wheels' steer angle without needing WheelCollider
-        // physics (which doesn't simulate on a kinematic rb).
-        [SyncVar] public float steerAngle;
-
-        // Server-set during DioNetworkManager.Update (the win-condition pass);
-        // arc-length the car has traveled along the track in world units. Used
-        // by the HUD position panel + minimap so every peer sees the same
-        // ranking without recomputing arc-length on the client.
+        // Server-set during DioNetworkManager.Update; arc-length the car has
+        // traveled along the track. Used by the HUD position panel + win
+        // detection. Server-to-client because the server is the only writer.
         [SyncVar] public float progressArc;
-
-        [Tooltip("How often the local player sends its inputs to the server (Hz). 60 matches the physics tick + Mirror sendRate so every tick gets fresh input.")]
-        public float inputSendRate = 60f;
 
         ArcadeCarController _car;
         Rigidbody _rb;
         Renderer[] _renderers;
         Dio.Powerups.States.CarStateMachine _stateMachine;
-        float _nextSendTime;
-        bool _loggedFirstInputSend;
-        bool _loggedFirstInputRecv;
-
-        // Latest received inputs (server-side).
-        ArcadeCarController.Inputs _latestInputs;
 
         void Awake()
         {
@@ -52,85 +53,94 @@ namespace Dio.Player
             _rb = GetComponent<Rigidbody>();
             _renderers = GetComponentsInChildren<Renderer>();
             _stateMachine = GetComponent<Dio.Powerups.States.CarStateMachine>();
-            // Network drives inputs; the controller never reads input itself.
+            // Default off — DioCar.OnStartClient enables it for the owner.
             _car.readLocalInput = false;
+        }
+
+        // Owner-only: apply powerup-state input modifications on top of the
+        // local controller's read inputs. Runs BEFORE ArcadeCarController's
+        // own FixedUpdate (DefaultExecutionOrder = -100) so its motor/steer
+        // application sees the modified values. Skipped on the server (which
+        // no longer simulates) and on remote clients (kinematic, no controller).
+        void FixedUpdate()
+        {
+            if (!isOwned) return;
+            if (_stateMachine == null) return;
+            // Read raw inputs, let the state machine modify them, then write
+            // back into currentInputs for ArcadeCarController.FixedUpdate to
+            // consume this same tick.
+            var raw = _car.ReadLocalInputsNow();
+            _stateMachine.ModifyInputs(ref raw);
+            _car.currentInputs = raw;
+            // Tell the controller it doesn't need to re-read this tick.
+            // (readLocalInput stays true so it falls back to ReadLocalInputsNow
+            // if some other path skips this method.)
         }
 
         public override void OnStartServer()
         {
-            // Server owns the rigidbody simulation.
-            _rb.isKinematic = false;
+            // Cars are CLIENT-authoritative (NetworkTransform's syncDirection =
+            // ClientToServer is set on the prefab). The server doesn't simulate
+            // the car physics — it just receives transform updates from the
+            // owner client and relays them to other clients. Mirror still
+            // requires a Rigidbody on the server side for trigger callbacks +
+            // collision queries against server-spawned obstacles, but it must
+            // be kinematic so Unity physics doesn't fight the network writes.
+            //
+            // Host special case: OnStartClient runs after this and flips the
+            // host's own car back to non-kinematic for full local sim.
+            _rb.isKinematic = true;
+            _rb.useGravity = false;
+            _rb.interpolation = RigidbodyInterpolation.None;
+            _rb.collisionDetectionMode = CollisionDetectionMode.Discrete;
+
             int connId = connectionToClient != null ? connectionToClient.connectionId : -1;
-            Debug.Log($"[DioCar] OnStartServer netId={netId} ownerConn={connId} (server simulates physics)");
+            Debug.Log($"[DioCar] OnStartServer netId={netId} ownerConn={connId} (kinematic; client-authoritative)");
         }
 
         public override void OnStartClient()
         {
             ApplyColor(colorIndex);
-            // On non-server clients, the rigidbody is driven by NetworkTransform.
-            // Force the strict "purely kinematic, no physics interpolation" config
-            // — without this, a kinematic-rb left on Interpolate / ContinuousDynamic
-            // can stutter, no-op transform writes, or stay frozen when the server
-            // sends a snapshot. Mirror's docs: kinematic clients should be Discrete
-            // + None for clean transform-driven sync.
-            if (!isServer)
+            ConfigureRigidbodyForRole();
+            Debug.Log($"[DioCar] OnStartClient netId={netId} isServer={isServer} isOwned={isOwned} kinematic={_rb.isKinematic} readLocalInput={_car.readLocalInput}");
+        }
+
+        // Mirror calls this when this peer is given authority. For player
+        // cars, this fires alongside OnStartClient on the owner — having both
+        // is harmless and guarantees the kinematic/sim state is right even if
+        // authority is reassigned later (host migration, etc).
+        public override void OnStartAuthority() => ConfigureRigidbodyForRole();
+        public override void OnStopAuthority() => ConfigureRigidbodyForRole();
+
+        void ConfigureRigidbodyForRole()
+        {
+            // Owner runs full physics; everyone else is kinematic interpolation.
+            // Host (isServer && isOwned) goes through this path too, ending at
+            // full-sim — that's intentional, the host's car is owned by the
+            // host's local client and they should feel zero input lag.
+            bool fullSim = isOwned;
+
+            if (fullSim)
+            {
+                _rb.isKinematic = false;
+                _rb.useGravity = false; // SphericalGravity drives gravity
+                _rb.interpolation = RigidbodyInterpolation.Interpolate;
+                _rb.collisionDetectionMode = CollisionDetectionMode.ContinuousDynamic;
+            }
+            else
             {
                 _rb.isKinematic = true;
+                _rb.useGravity = false;
                 _rb.interpolation = RigidbodyInterpolation.None;
                 _rb.collisionDetectionMode = CollisionDetectionMode.Discrete;
             }
-            Debug.Log($"[DioCar] OnStartClient netId={netId} isServer={isServer} isOwned={isOwned} kinematic={_rb.isKinematic}");
-        }
 
-        void Update()
-        {
-            // The car is OWNED by the connection but it's not the connection's
-            // player object (DioPlayer is). So `isOwned`, not `isLocalPlayer`.
-            if (!isOwned) return;
-
-            // Throttle input upload to the server.
-            if (Time.unscaledTime < _nextSendTime) return;
-            _nextSendTime = Time.unscaledTime + 1f / Mathf.Max(1f, inputSendRate);
-
-            var inputs = _car.ReadLocalInputsNow();
-
-            if (!_loggedFirstInputSend)
-            {
-                _loggedFirstInputSend = true;
-                Debug.Log($"[DioCar] netId={netId} first input send: steer/throttle={inputs.steerThrottle} brake={inputs.brake} hb={inputs.handbrake}");
-            }
-
-            CmdSendInputs(inputs.steerThrottle, inputs.brake, inputs.handbrake);
-        }
-
-        [Command]
-        void CmdSendInputs(Vector2 steerThrottle, bool brake, bool handbrake)
-        {
-            // Trivial sanity clamp; this is the only place untrusted client data enters server simulation.
-            _latestInputs = new ArcadeCarController.Inputs
-            {
-                steerThrottle = new Vector2(Mathf.Clamp(steerThrottle.x, -1f, 1f),
-                                            Mathf.Clamp(steerThrottle.y, -1f, 1f)),
-                brake = brake,
-                handbrake = handbrake,
-            };
-
-            if (!_loggedFirstInputRecv)
-            {
-                _loggedFirstInputRecv = true;
-                int connId = connectionToClient != null ? connectionToClient.connectionId : -1;
-                Debug.Log($"[DioCar] SERVER netId={netId} got first input from conn={connId}: steer/throttle={steerThrottle}");
-            }
-        }
-
-        void FixedUpdate()
-        {
-            if (!isServer) return;
-            var inputs = _latestInputs;
-            if (_stateMachine != null) _stateMachine.ModifyInputs(ref inputs);
-            _car.currentInputs = inputs;
-            // Publish the controller's current steering for client-side wheel visuals.
-            steerAngle = _car.CurrentSteerAngle;
+            // Owner runs full physics, but inputs flow through DioCar.FixedUpdate
+            // (which interleaves the powerup state machine before applying).
+            // Setting readLocalInput=false on the controller prevents it from
+            // overwriting `currentInputs` with the un-modified raw read.
+            // Remote clients also keep readLocalInput=false (no inputs at all).
+            _car.readLocalInput = false;
         }
 
         // ---- Color sync ----

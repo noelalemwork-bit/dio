@@ -110,6 +110,7 @@ namespace Dio.Player.EditorTools
         static void BuildPart(Transform parent, string name, Mesh mesh, Vector3 offset, Vector3 scale, Material material, bool addCollider)
         {
             GameObject go;
+            UnityEngine.Collider createdCol = null;
             if (mesh != null)
             {
                 go = new GameObject(name, typeof(MeshFilter), typeof(MeshRenderer));
@@ -119,6 +120,7 @@ namespace Dio.Player.EditorTools
                     var mc = go.AddComponent<MeshCollider>();
                     mc.sharedMesh = mesh;
                     mc.convex = true;
+                    createdCol = mc;
                 }
             }
             else
@@ -130,12 +132,43 @@ namespace Dio.Player.EditorTools
                     var bc = go.GetComponent<BoxCollider>();
                     if (bc != null) Object.DestroyImmediate(bc);
                 }
+                else
+                {
+                    createdCol = go.GetComponent<BoxCollider>();
+                }
             }
+            // Mario-Kart-style bumping: a slightly bouncy + slick chassis
+            // PhysicMaterial. Bounce+frictionless on the body keeps the
+            // contact response punchy without bleeding speed when two cars
+            // graze. Wheel friction is unaffected (WheelCollider has its own
+            // friction curves and ignores this material).
+            if (createdCol != null) createdCol.sharedMaterial = GetOrCreateBumperMaterial();
             go.transform.SetParent(parent, false);
             go.transform.localPosition = offset;
             go.transform.localScale = scale;
             var r = go.GetComponent<MeshRenderer>();
             if (r != null) r.sharedMaterial = material;
+        }
+
+        static PhysicsMaterial _cachedBumperMat;
+        static PhysicsMaterial GetOrCreateBumperMaterial()
+        {
+            if (_cachedBumperMat != null) return _cachedBumperMat;
+            EnsureDir(MaterialsDir);
+            string path = MaterialsDir + "/CarBumper.physicMaterial";
+            var existing = AssetDatabase.LoadAssetAtPath<PhysicsMaterial>(path);
+            if (existing != null) { _cachedBumperMat = existing; return existing; }
+            var pm = new PhysicsMaterial("CarBumper")
+            {
+                bounciness = 0.55f,
+                dynamicFriction = 0.05f,
+                staticFriction = 0.05f,
+                bounceCombine = PhysicsMaterialCombine.Maximum,
+                frictionCombine = PhysicsMaterialCombine.Minimum,
+            };
+            AssetDatabase.CreateAsset(pm, path);
+            _cachedBumperMat = pm;
+            return pm;
         }
 
         static WheelRig BuildWheel(Transform parent, VehicleProfile p, Vector3 chassisXZ, string name, Material wheelMat)

@@ -63,9 +63,33 @@ These are the ones the user wants you to investigate with the MCPs:
 
 ## What changed in this session (latest)
 
-- **NetworkTransformReliable tuning**: world coords, no `onlySyncOnChange`, every-tick streaming, 5 mm position precision on cars / 1 cm on obstacles. Centralised in [Assets/Dio/Scripts/Net/Editor/NetworkTransformConfigurer.cs](Assets/Dio/Scripts/Net/Editor/NetworkTransformConfigurer.cs); both prefab builders call it.
-- **60 Hz everywhere**: `Time.fixedDeltaTime = 1/60`, `NetworkManager.sendRate = 60`, `DioCar.inputSendRate = 60` — server sim, snapshot stream, and client input upload all share the same timeline.
-- **Arc-length tracker**: `TrackBuilder.ArcLengthOf(level, worldPos, planetCenter)` projects a car onto the geodesic chain. `DioNetworkManager` writes `DioCar.progressArc` (new SyncVar) per tick; win detection uses arc-length, position panel sorts by it.
+### Networking — switched to client-authority physics
+
+The car was server-authoritative (Cmd → server sim → NetworkTransform back), which added a full RTT of input lag and, in practice, caused joined-player cars to refuse to accelerate. Per the project goal of "perfect physics, no latency on LAN," the car is now **client-authoritative**:
+
+- **Local owner runs full physics** (rb.isKinematic = false). They feel zero input lag.
+- **`NetworkTransformReliable.syncDirection = ClientToServer`** on the Car prefab — the owner pushes position+rotation up; the server relays to other clients. Cf. [Mirror docs on SyncDirection](https://mirror-networking.gitbook.io/docs/manual/general/syncdirection).
+- **Server + remote clients** keep cars kinematic; transforms are driven by NetworkTransform OnDeserialize. Triggers (powerup boxes, win detection) still fire because the kinematic body has a Rigidbody.
+- **Powerup state machine** input modification moved from `DioCar.FixedUpdate` (server-only) to the owner's path. `ArcadeCarController.readLocalInput = false` always; DioCar.FixedUpdate is the single writer of `currentInputs`.
+
+### Other tuning
+
+- **NetworkTransform target field set explicitly** on every prefab (reflection-built prefabs serialize with target=null; OnValidate sets it in editor but not from build scripts). Fixed in [NetworkTransformConfigurer.cs](Assets/Dio/Scripts/Net/Editor/NetworkTransformConfigurer.cs).
+- **World-coords, every-tick streaming, 5 mm precision on cars** / 1 cm on obstacles. `onlySyncOnChange = false` for the car so restart-stutter is impossible.
+- **60 Hz everywhere**: `Time.fixedDeltaTime = 1/60`, `NetworkManager.sendRate = 60`. Pinned in `DioNetworkManager.Awake`.
+- **Race start delay = 4 s** to host the cinematic intro + 3-2-1-GO countdown.
+
+### Visual / collision pass
+
+- **Higher-poly planet** ([HighResIcoSphere.cs](Assets/Dio/Scripts/Level/HighResIcoSphere.cs)): subdivision-4 icosphere, ~2.5k verts. The track ribbon now visibly aligns with the surface.
+- **Side-guard rails** ([TrackBuilder.BuildGuards](Assets/Dio/Scripts/Level/TrackBuilder.cs)): both edges of the track get a thin wall mesh (height 2.5m, skirt 3m below surface). Inward-facing winding so cars on track see the wall, off-track sees only backside.
+- **Bouncy chassis PhysicMaterial** on the body collider so car-to-car body collisions feel Mario-Kart-like instead of phasing.
+- **Circular minimap mask** — `Mask` + procedural disc sprite ([Assets/Dio/UI/Generated/MinimapCircle.png](Assets/Dio/UI/Generated/MinimapCircle.png)). Markers are siblings of the RawImage under the mask, so they render on top.
+
+### Race feel
+
+- **Cinematic intro** ([RaceIntro.cs](Assets/Dio/Scripts/UI/RaceIntro.cs)): camera starts high above the player, swoops down via a slow chase-lerp, while a centered TMP text bounces "3 ... 2 ... 1 ... GO!". Pop animation: scale 0.4→1.25→0.95→1.05→1.0 with overshoot, alpha holds till 70% then fades. Inputs are locked locally on every car until GO!.
+- **Arc-length tracker**: `TrackBuilder.ArcLengthOf(level, worldPos, planetCenter)` for accurate lap/finish detection. `DioCar.progressArc` SyncVar feeds the HUD position panel.
 - **Ping HUD**: `RaceHUD.pingLabel` shows live `NetworkTime.rtt` with green/amber/red colour bands.
 
 ## How to use the MCPs efficiently

@@ -142,7 +142,10 @@ namespace Dio.Net
             {
                 levelGuid = string.Empty,
                 seed = Random.Range(int.MinValue, int.MaxValue),
-                startServerTime = NetworkTime.time + 1.0,
+                // Long delay so the cinematic intro gets time to swoop the
+                // camera in + run the 3-2-1-GO! countdown. RaceIntro on each
+                // peer locks inputs locally until startServerTime.
+                startServerTime = NetworkTime.time + 4.0,
             };
 
             // Build the server-side planet FIRST so newly-spawned cars can find it

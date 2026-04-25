@@ -495,29 +495,46 @@ namespace Dio.UI.EditorTools
             var hudRootImg = hudRoot.GetComponent<Image>(); if (hudRootImg != null) hudRootImg.raycastTarget = false;
             hudRoot.SetActive(false);
 
-            // Minimap (top-left). RawImage shows the RenderTexture rendered by
-            // a dedicated MinimapCam camera pinned above the local player.
-            // Cars + powerup boxes appear as UI markers parented to MarkerRoot
-            // (spawned dynamically by MinimapRenderer at runtime) so the actual
-            // RT only contains the planet + track strip. Sized 1.5× wider than
-            // the original 220 — and the camera ortho is bigger too — so other
-            // players actually fit in view.
-            var minimapGo = new GameObject("Minimap", typeof(RectTransform), typeof(RawImage));
-            minimapGo.transform.SetParent(hudRoot.transform, false);
-            var minimapRt = (RectTransform)minimapGo.transform;
+            // Minimap (top-left). The structure:
+            //   MinimapHolder (positioning)
+            //     CircleMask (Image + Mask, circle sprite — clips children to a disc)
+            //       RawImage (the RT)
+            //       MarkerRoot (player + powerup icons, on TOP of the RT)
+            // Mask requires a Graphic on the same node, so we put the circular
+            // alpha sprite there and let `Mask` clip everything inside it.
+            var minimapHolder = new GameObject("Minimap", typeof(RectTransform));
+            minimapHolder.transform.SetParent(hudRoot.transform, false);
+            var minimapRt = (RectTransform)minimapHolder.transform;
             minimapRt.anchorMin = new Vector2(0, 1); minimapRt.anchorMax = new Vector2(0, 1);
             minimapRt.pivot = new Vector2(0, 1);
             minimapRt.anchoredPosition = new Vector2(24, -24);
             minimapRt.sizeDelta = new Vector2(330, 330);
-            var minimapImage = minimapGo.GetComponent<RawImage>();
+
+            var maskGo = new GameObject("CircleMask", typeof(RectTransform), typeof(Image), typeof(Mask));
+            maskGo.transform.SetParent(minimapHolder.transform, false);
+            var maskRt = (RectTransform)maskGo.transform;
+            maskRt.anchorMin = Vector2.zero; maskRt.anchorMax = Vector2.one;
+            maskRt.offsetMin = Vector2.zero; maskRt.offsetMax = Vector2.zero;
+            var maskImg = maskGo.GetComponent<Image>();
+            maskImg.sprite = GetOrCreateCircleSprite();
+            maskImg.color = Color.white;
+            maskImg.raycastTarget = false;
+            maskGo.GetComponent<Mask>().showMaskGraphic = true;
+
+            var rawGo = new GameObject("RT", typeof(RectTransform), typeof(RawImage));
+            rawGo.transform.SetParent(maskGo.transform, false);
+            var rawRt = (RectTransform)rawGo.transform;
+            rawRt.anchorMin = Vector2.zero; rawRt.anchorMax = Vector2.one;
+            rawRt.offsetMin = Vector2.zero; rawRt.offsetMax = Vector2.zero;
+            var minimapImage = rawGo.GetComponent<RawImage>();
             minimapImage.color = Color.white;
             minimapImage.raycastTarget = false;
 
-            // Marker root - covers the same rect, parents the runtime UI markers.
-            // RectMask2D clips markers that fall outside the minimap rect (e.g. far-hemisphere players,
-            // or anything past the orthoSize).
-            var markerRootGo = new GameObject("MarkerRoot", typeof(RectTransform), typeof(RectMask2D));
-            markerRootGo.transform.SetParent(minimapGo.transform, false);
+            // Marker root sits ON TOP of the RawImage as a sibling. Markers are
+            // dynamic Image children added by MinimapRenderer at runtime. Using
+            // the parent Mask means they'll be clipped to the circle too.
+            var markerRootGo = new GameObject("MarkerRoot", typeof(RectTransform));
+            markerRootGo.transform.SetParent(maskGo.transform, false);
             var markerRt = (RectTransform)markerRootGo.transform;
             markerRt.anchorMin = Vector2.zero; markerRt.anchorMax = Vector2.one;
             markerRt.offsetMin = Vector2.zero; markerRt.offsetMax = Vector2.zero;
@@ -707,6 +724,49 @@ namespace Dio.UI.EditorTools
             pingText.color = Color.white;
             pingText.raycastTarget = false;
 
+            // ---- Cinematic countdown overlay ----
+            // Centered, large TMP text inside a CanvasGroup so RaceIntro can
+            // pop+fade it. The text starts hidden (alpha 0) and is driven by
+            // the IntroSequence coroutine.
+            var countdownGo = new GameObject("Countdown", typeof(RectTransform), typeof(CanvasGroup));
+            countdownGo.transform.SetParent(hudRoot.transform, false);
+            var countdownRt = (RectTransform)countdownGo.transform;
+            countdownRt.anchorMin = new Vector2(0.5f, 0.5f);
+            countdownRt.anchorMax = new Vector2(0.5f, 0.5f);
+            countdownRt.pivot = new Vector2(0.5f, 0.5f);
+            countdownRt.sizeDelta = new Vector2(720, 360);
+            var countdownCg = countdownGo.GetComponent<CanvasGroup>();
+            countdownCg.alpha = 0f;
+            countdownCg.blocksRaycasts = false;
+            countdownCg.interactable = false;
+
+            var countdownLabelGo = new GameObject("Label", typeof(RectTransform));
+            countdownLabelGo.transform.SetParent(countdownGo.transform, false);
+            var countdownLabelRt = (RectTransform)countdownLabelGo.transform;
+            countdownLabelRt.anchorMin = Vector2.zero; countdownLabelRt.anchorMax = Vector2.one;
+            countdownLabelRt.offsetMin = Vector2.zero; countdownLabelRt.offsetMax = Vector2.zero;
+            var countdownText = countdownLabelGo.AddComponent<TextMeshProUGUI>();
+            countdownText.text = "";
+            countdownText.fontSize = 280;
+            countdownText.fontStyle = FontStyles.Bold;
+            countdownText.alignment = TextAlignmentOptions.Center;
+            countdownText.color = new Color(0.95f, 0.65f, 0.20f, 1f);
+            countdownText.font = TMP_Settings.defaultFontAsset;
+            countdownText.raycastTarget = false;
+            // Hot pop drop-shadow via TMP's outline setting — visible on both
+            // light and dark backgrounds.
+            countdownText.outlineColor = new Color32(20, 12, 8, 255);
+            countdownText.outlineWidth = 0.25f;
+
+            // RaceIntro must Awake BEFORE OnRaceStarted fires, but the HUD
+            // root starts inactive (the menu hides it). Park RaceIntro on a
+            // dedicated always-active GameObject and just reference the
+            // countdown text fields.
+            var introGo = new GameObject("RaceIntro");
+            var raceIntro = introGo.AddComponent<RaceIntro>();
+            raceIntro.countdownGroup = countdownCg;
+            raceIntro.countdownLabel = countdownText;
+
             // ---- Win panel (siblings the menu/hud roots; sits ON TOP of both) ----
             // Independent of menuRoot/hudRoot because the win UI replaces both
             // for ~5 seconds before the lobby is restored.
@@ -822,6 +882,52 @@ namespace Dio.UI.EditorTools
         }
 
         // ---------- helpers ----------
+
+        // Procedural circular sprite for the minimap mask. Cached as a project
+        // asset so re-running the builder returns the same Texture2D rather
+        // than spawning a new one every time. The texture itself is a 256×256
+        // RGBA disc with smooth alpha falloff at the edge.
+        const string CircleSpritePath = "Assets/Dio/UI/Generated/MinimapCircle.png";
+        static Sprite _cachedCircleSprite;
+        static Sprite GetOrCreateCircleSprite()
+        {
+            if (_cachedCircleSprite != null) return _cachedCircleSprite;
+            EnsureDir("Assets/Dio/UI/Generated");
+            var existing = AssetDatabase.LoadAssetAtPath<Sprite>(CircleSpritePath);
+            if (existing != null) { _cachedCircleSprite = existing; return existing; }
+
+            const int size = 256;
+            var tex = new Texture2D(size, size, TextureFormat.RGBA32, false);
+            float r = size * 0.5f;
+            for (int y = 0; y < size; y++)
+            {
+                for (int x = 0; x < size; x++)
+                {
+                    float dx = x - r + 0.5f;
+                    float dy = y - r + 0.5f;
+                    float d = Mathf.Sqrt(dx * dx + dy * dy);
+                    // 1px feather at the edge for anti-aliasing.
+                    float a = Mathf.Clamp01(r - d);
+                    tex.SetPixel(x, y, new Color(1f, 1f, 1f, a));
+                }
+            }
+            tex.Apply();
+
+            var bytes = tex.EncodeToPNG();
+            System.IO.File.WriteAllBytes(CircleSpritePath, bytes);
+            Object.DestroyImmediate(tex);
+            AssetDatabase.ImportAsset(CircleSpritePath);
+            var importer = AssetImporter.GetAtPath(CircleSpritePath) as TextureImporter;
+            if (importer != null)
+            {
+                importer.textureType = TextureImporterType.Sprite;
+                importer.alphaIsTransparency = true;
+                importer.mipmapEnabled = false;
+                importer.SaveAndReimport();
+            }
+            _cachedCircleSprite = AssetDatabase.LoadAssetAtPath<Sprite>(CircleSpritePath);
+            return _cachedCircleSprite;
+        }
 
         static void EnsureDir(string path)
         {

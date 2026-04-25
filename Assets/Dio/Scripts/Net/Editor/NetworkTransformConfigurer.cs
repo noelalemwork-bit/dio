@@ -42,6 +42,12 @@ namespace Dio.Net.EditorTools
             var nt = go.GetComponent(t);
             if (nt == null) nt = go.AddComponent(t);
 
+            // ALWAYS set target to the GameObject's transform. Mirror's
+            // OnValidate sets this in the editor, but reflection-built prefabs
+            // can serialize with a null target — which silently breaks every
+            // peer's ability to write/read the transform.
+            SetField(nt, "target", go.transform);
+
             // Set common NetworkTransformBase fields.
             SetField(nt, "syncPosition", true);
             SetField(nt, "syncRotation", true);
@@ -53,11 +59,13 @@ namespace Dio.Net.EditorTools
             SetField(nt, "timelineOffset", true);
 
             // CoordinateSpace: enum on Mirror.NetworkTransformBase. Look it up
-            // via the Mirror assembly so we don't take a hard reference here.
-            var coordType = System.Type.GetType("Mirror.CoordinateSpace, Mirror");
+            // via the Mirror assembly. Try multiple assembly identities since
+            // vendored Mirror builds vary on the assembly attribute.
+            var coordType = System.Type.GetType("Mirror.CoordinateSpace, Mirror")
+                         ?? System.Type.GetType("Mirror.CoordinateSpace, Mirror.Components")
+                         ?? FindTypeInLoadedAssemblies("Mirror.CoordinateSpace");
             if (coordType != null)
             {
-                // World = 1 (Local = 0 in Mirror's enum).
                 var worldVal = System.Enum.Parse(coordType, "World");
                 SetField(nt, "coordinateSpace", worldVal);
             }
@@ -71,14 +79,38 @@ namespace Dio.Net.EditorTools
                 // 0.005 m = 5 mm. Below the eye can resolve at race speed but
                 // tight enough to catch micro-corrections after collisions.
                 SetField(nt, "positionPrecision", 0.005f);
+
+                // CLIENT AUTHORITY for the player car — LAN-friendly: the
+                // local owner is the only physics simulator for their own car,
+                // pushes its position to the server, server relays to peers.
+                // Zero input lag, zero round-trip. Mirror docs:
+                // https://mirror-networking.gitbook.io/docs/manual/general/syncdirection
+                var sdType = System.Type.GetType("Mirror.SyncDirection, Mirror")
+                          ?? FindTypeInLoadedAssemblies("Mirror.SyncDirection");
+                if (sdType != null)
+                {
+                    var c2s = System.Enum.Parse(sdType, "ClientToServer");
+                    SetField(nt, "syncDirection", c2s);
+                }
             }
             else
             {
-                // 1 cm — fine for projectiles + obstacles.
+                // 1 cm — fine for projectiles + obstacles. These stay
+                // server-authoritative (default ServerToClient).
                 SetField(nt, "positionPrecision", 0.01f);
             }
 
             return nt;
+        }
+
+        static System.Type FindTypeInLoadedAssemblies(string fullName)
+        {
+            foreach (var asm in System.AppDomain.CurrentDomain.GetAssemblies())
+            {
+                var t = asm.GetType(fullName, throwOnError: false);
+                if (t != null) return t;
+            }
+            return null;
         }
 
         static void SetField(Component c, string name, object value)
