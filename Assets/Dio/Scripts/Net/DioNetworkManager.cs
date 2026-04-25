@@ -194,7 +194,7 @@ namespace Dio.Net
         void OnClientRaceStart(RaceStartMessage msg)
         {
             // Fires on every client, including the host's local client.
-            // isServer-side already received this as part of its own send.
+            Debug.Log($"[Dio] Client received RaceStartMessage. isServer={NetworkServer.active} startTime={msg.startServerTime:0.000}");
             OnRaceStarted?.Invoke(NetworkServer.active, msg);
         }
 

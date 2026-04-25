@@ -75,6 +75,7 @@ namespace Dio.Level
                 return;
             }
 
+            Debug.Log($"[RaceBootstrap] BuildVisualScene level='{level.name}' radius={level.planetRadius}");
             CurrentLevel = level;
             EnsurePlanet(level.planetRadius);
             EnsureTrackLine(level);
@@ -135,6 +136,7 @@ namespace Dio.Level
             rc.car = target.GetComponent<ArcadeCarController>();
             rc.gravity = target.GetComponent<SphericalGravity>();
             rc.mode = RaceCameraMode.Chase;
+            Debug.Log($"[RaceBootstrap] camera attached to '{target.name}' (local owned car)");
         }
     }
 }

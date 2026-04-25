@@ -29,6 +29,8 @@ namespace Dio.Player
         Renderer[] _renderers;
         Dio.Powerups.States.CarStateMachine _stateMachine;
         float _nextSendTime;
+        bool _loggedFirstInputSend;
+        bool _loggedFirstInputRecv;
 
         // Latest received inputs (server-side).
         ArcadeCarController.Inputs _latestInputs;
@@ -47,6 +49,8 @@ namespace Dio.Player
         {
             // Server owns the rigidbody simulation.
             _rb.isKinematic = false;
+            int connId = connectionToClient != null ? connectionToClient.connectionId : -1;
+            Debug.Log($"[DioCar] OnStartServer netId={netId} ownerConn={connId} (server simulates physics)");
         }
 
         public override void OnStartClient()
@@ -56,6 +60,7 @@ namespace Dio.Player
             // server's authoritative position is interpolated to us. Keep it
             // kinematic on remote clients so its physics doesn't double-step.
             if (!isServer) _rb.isKinematic = true;
+            Debug.Log($"[DioCar] OnStartClient netId={netId} isServer={isServer} isOwned={isOwned} kinematic={_rb.isKinematic}");
         }
 
         void Update()
@@ -69,6 +74,13 @@ namespace Dio.Player
             _nextSendTime = Time.unscaledTime + 1f / Mathf.Max(1f, inputSendRate);
 
             var inputs = _car.ReadLocalInputsNow();
+
+            if (!_loggedFirstInputSend)
+            {
+                _loggedFirstInputSend = true;
+                Debug.Log($"[DioCar] netId={netId} first input send: steer/throttle={inputs.steerThrottle} brake={inputs.brake} hb={inputs.handbrake}");
+            }
+
             CmdSendInputs(inputs.steerThrottle, inputs.brake, inputs.handbrake);
         }
 
@@ -83,6 +95,13 @@ namespace Dio.Player
                 brake = brake,
                 handbrake = handbrake,
             };
+
+            if (!_loggedFirstInputRecv)
+            {
+                _loggedFirstInputRecv = true;
+                int connId = connectionToClient != null ? connectionToClient.connectionId : -1;
+                Debug.Log($"[DioCar] SERVER netId={netId} got first input from conn={connId}: steer/throttle={steerThrottle}");
+            }
         }
 
         void FixedUpdate()
