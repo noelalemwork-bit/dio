@@ -122,15 +122,20 @@ namespace Dio.UI.EditorTools
         public static LevelData BuildDefaultLevel()
         {
             EnsureDir(LevelsDir);
-            var existing = AssetDatabase.LoadAssetAtPath<LevelData>(DefaultLevelPath);
-            if (existing != null) return existing;
-
-            var lvl = ScriptableObject.CreateInstance<LevelData>();
-            lvl.planetRadius = 200f;
-            lvl.seed = 42;
-            lvl.points.Add(new TrackPoint { directionFromCenter = Vector3.up });
-            lvl.points.Add(new TrackPoint { directionFromCenter = new Vector3(0.7f, 0.4f, 0.6f).normalized });
-            AssetDatabase.CreateAsset(lvl, DefaultLevelPath);
+            var lvl = AssetDatabase.LoadAssetAtPath<LevelData>(DefaultLevelPath);
+            if (lvl == null)
+            {
+                lvl = ScriptableObject.CreateInstance<LevelData>();
+                lvl.planetRadius = 200f;
+                lvl.seed = 42;
+                lvl.points.Add(new TrackPoint { directionFromCenter = Vector3.up });
+                lvl.points.Add(new TrackPoint { directionFromCenter = new Vector3(0.7f, 0.4f, 0.6f).normalized });
+                AssetDatabase.CreateAsset(lvl, DefaultLevelPath);
+            }
+            // Always upgrade trackWidth — that's the dimension we just bumped.
+            // Custom levels (Tools > Dio > New Level) inherit the LevelData class default.
+            lvl.trackWidth = 15f;
+            EditorUtility.SetDirty(lvl);
             AssetDatabase.SaveAssets();
             return lvl;
         }
@@ -245,6 +250,9 @@ namespace Dio.UI.EditorTools
             // Runtime binder that keeps the skybox's _PlayerUp aligned with the
             // local player's surface normal as they drive around the planet.
             sunGo.AddComponent<Dio.Common.SkyboxPlayerUpBinder>();
+            // Publishes _DioTime (Mirror.NetworkTime.time) as a shader global so
+            // sky / mystery-box / car shaders animate in lock-step on every peer.
+            sunGo.AddComponent<Dio.Common.NetworkTimeBinder>();
 
             // Sunset skybox.
             var skyMat = BuildSkyboxMaterial();

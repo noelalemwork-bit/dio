@@ -18,7 +18,7 @@ namespace Dio.Level
     {
         public float planetRadius = 200f;
         public int seed = 12345;
-        public float trackWidth = 6f;
+        public float trackWidth = 15f;
         public List<TrackPoint> points = new List<TrackPoint>();
 
         public bool HasMinimum => points.Count >= 2;

@@ -19,6 +19,8 @@ namespace Dio.Common
         [Tooltip("Slerp speed in 1/s. 0 = instant. ~6-10 feels natural for arcade-paced motion.")]
         public float smoothSpeed = 8f;
 
+        static readonly int PlayerUpGlobalId = Shader.PropertyToID("_PlayerUp");
+
         Material _runtimeMat;
         Vector3 _currentUp = Vector3.up;
         bool _materialOwned;
@@ -81,7 +83,11 @@ namespace Dio.Common
                 ? Vector3.Slerp(_currentUp, targetUp, 1f - Mathf.Exp(-smoothSpeed * Time.deltaTime))
                 : targetUp;
 
-            _runtimeMat.SetVector(upPropertyName, new Vector4(_currentUp.x, _currentUp.y, _currentUp.z, 0f));
+            var v = new Vector4(_currentUp.x, _currentUp.y, _currentUp.z, 0f);
+            _runtimeMat.SetVector(upPropertyName, v);
+            // Also publish as a shader global so non-skybox shaders (cars,
+            // wheels, planet) can use the same surface-up for consistent shading.
+            Shader.SetGlobalVector(PlayerUpGlobalId, v);
         }
     }
 }

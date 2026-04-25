@@ -23,6 +23,7 @@ Shader "Dio/CarBodyCamo"
 
             float4 _ColorA, _ColorB;
             float _NoiseScale, _Threshold, _Edge;
+            float4 _PlayerUp; // global from SkyboxPlayerUpBinder
 
             float hash13(float3 p) { p = frac(p * 0.3183099 + 0.1); p *= 17.0; return frac(p.x*p.y*p.z*(p.x+p.y+p.z)); }
             float vnoise(float3 p)
@@ -54,8 +55,11 @@ Shader "Dio/CarBodyCamo"
                 half3 base = lerp(_ColorA.rgb, _ColorB.rgb, mask);
 
                 // Cheap directional shading so the car has form even without a light.
-                float ndl = saturate(dot(normalize(i.wNormal), normalize(float3(0.4, 1.0, 0.2))));
-                base *= 0.55 + 0.55 * ndl;
+                float3 keyDir = _PlayerUp.xyz;
+                if (dot(keyDir, keyDir) < 0.001) keyDir = float3(0, 1, 0);
+                keyDir = normalize(keyDir);
+                float ndl = saturate(dot(normalize(i.wNormal), keyDir));
+                base *= 0.70 + 0.45 * ndl;
 
                 return half4(base, 1);
             }

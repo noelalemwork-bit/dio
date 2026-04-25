@@ -27,6 +27,7 @@ Shader "Dio/CarWheel"
 
             float4 _TireColor, _SpokeBase, _SpokeStripe, _HubColor;
             float _SpokeCount;
+            float4 _PlayerUp; // global from SkyboxPlayerUpBinder
 
             v2f vert(appdata v)
             {
@@ -61,9 +62,15 @@ Shader "Dio/CarWheel"
 
                 half3 col = lerp(sideCol, capCol, onCap);
 
-                // Lambert-ish shading.
-                float ndl = saturate(dot(normalize(i.wNormal), normalize(float3(0.4, 1.0, 0.2))));
-                col *= 0.6 + 0.5 * ndl;
+                // Use the global player-up (set by SkyboxPlayerUpBinder) as the
+                // key-light direction so all peers shade the wheel the same way
+                // regardless of where they are on the planet.
+                float3 keyDir = _PlayerUp.xyz;
+                if (dot(keyDir, keyDir) < 0.001) keyDir = float3(0, 1, 0);
+                keyDir = normalize(keyDir);
+                float ndl = saturate(dot(normalize(i.wNormal), keyDir));
+                // Bright ambient floor so the tire is dark-grey, not full black.
+                col *= 0.80 + 0.35 * ndl;
 
                 return half4(col, 1);
             }

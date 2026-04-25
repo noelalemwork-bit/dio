@@ -31,6 +31,7 @@ Shader "Dio/EarthPlanet"
 
             float4 _Ocean, _Coast, _Lowland, _Highland, _Peak;
             float _NoiseScale, _SeaLevel, _CoastWidth, _MountainStart;
+            float4 _PlayerUp; // global from SkyboxPlayerUpBinder (unused for the planet itself but defined for consistency)
 
             float hash13(float3 p) { p = frac(p * 0.3183099 + 0.1); p *= 17.0; return frac(p.x*p.y*p.z*(p.x+p.y+p.z)); }
             float vnoise(float3 p)
@@ -71,8 +72,10 @@ Shader "Dio/EarthPlanet"
                 else                              col = lerp(_Highland.rgb, _Peak.rgb,
                                                             saturate((h - _MountainStart) / 0.18));
 
-                float ndl = saturate(dot(normalize(i.wNormal), normalize(float3(0.4, 1.0, 0.2))));
-                col *= 0.55 + 0.55 * ndl;
+                // Lit by the planet's own surface normal — gives the cartoon
+                // "everywhere is lit" look so the player can see the track from any side.
+                float ndl = saturate(dot(normalize(i.wNormal), normalize(i.oPos)));
+                col *= 0.75 + 0.40 * ndl;
 
                 return half4(col, 1);
             }

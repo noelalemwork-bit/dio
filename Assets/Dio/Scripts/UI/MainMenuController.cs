@@ -91,6 +91,12 @@ namespace Dio.UI
             joinButton.onClick.AddListener(OnJoinClicked);
             browserCloseButton.onClick.AddListener(() => browserPanel.SetActive(false));
             if (directConnectButton != null) directConnectButton.onClick.AddListener(OnDirectConnectClicked);
+            if (directIpField != null)
+            {
+                directIpField.text = LocalPrefs.LastDirectIp;
+                // Enter (or any "submit") in the IP field triggers Connect.
+                directIpField.onSubmit.AddListener(_ => OnDirectConnectClicked());
+            }
             startButton.onClick.AddListener(OnStartClicked);
             leaveButton.onClick.AddListener(OnLeaveClicked);
 
@@ -259,6 +265,9 @@ namespace Dio.UI
             if (directIpField == null || net == null) return;
             string ip = directIpField.text.Trim();
             if (string.IsNullOrEmpty(ip)) { browserStatusLabel.text = "Enter an IP first."; return; }
+
+            // Remember it so the next session prefills the field.
+            LocalPrefs.LastDirectIp = ip;
 
             // Pull the host's listening port off the active transport's ServerUri.
             // KCP defaults to 7777; users can override by editing the transport asset.

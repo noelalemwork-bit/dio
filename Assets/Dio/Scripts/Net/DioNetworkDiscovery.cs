@@ -1,4 +1,8 @@
+using System;
+using System.Collections.Generic;
 using System.Net;
+using System.Net.NetworkInformation;
+using System.Net.Sockets;
 using Mirror;
 using Mirror.Discovery;
 using UnityEngine;
@@ -29,8 +33,85 @@ namespace Dio.Net
         public override void Start()
         {
             secretHandshake = DioHandshake; // override whatever OnValidate scribbled
+            // Disable Mirror's built-in single-address Invoke; we run our own
+            // multi-adapter broadcaster below so VPN-style virtual adapters
+            // (Cloudflare WARP, Tailscale, ZeroTier) don't swallow the broadcast.
+            enableActiveDiscovery = false;
             base.Start();
-            Debug.Log($"[Dio Discovery] ready. handshake=0x{DioHandshake:X16} protocol=v{ProtocolVersion}");
+
+            CancelInvoke(nameof(MultiAdapterBroadcast));
+            InvokeRepeating(nameof(MultiAdapterBroadcast), 0.1f, 3f);
+
+            Debug.Log($"[Dio Discovery] ready. handshake=0x{DioHandshake:X16} protocol=v{ProtocolVersion} (multi-adapter broadcast)");
+        }
+
+        // Replaces Mirror's BroadcastDiscoveryRequest with one that sends to
+        // EVERY active adapter's subnet broadcast address, plus 255.255.255.255
+        // as a fallback. This works around setups where one adapter (typically
+        // a VPN like Cloudflare WARP) hogs the default route and silently
+        // intercepts limited-broadcast UDP packets.
+        public void MultiAdapterBroadcast()
+        {
+            if (clientUdpClient == null) return;
+            if (NetworkClient.isConnected)
+            {
+                StopDiscovery();
+                return;
+            }
+
+            var addresses = GetBroadcastAddresses();
+            using (var writer = NetworkWriterPool.Get())
+            {
+                writer.WriteLong(secretHandshake);
+                try { writer.Write(GetRequest()); }
+                catch (Exception ex) { Debug.LogException(ex); return; }
+                ArraySegment<byte> data = writer.ToArraySegment();
+
+                foreach (var addr in addresses)
+                {
+                    try
+                    {
+                        var ep = new IPEndPoint(addr, serverBroadcastListenPort);
+                        clientUdpClient.SendAsync(data.Array, data.Count, ep);
+                    }
+                    catch { /* one bad NIC shouldn't stop the rest */ }
+                }
+            }
+        }
+
+        // Enumerate "up" non-loopback IPv4 adapters and compute each one's
+        // subnet broadcast (addr | ~mask). Returns 255.255.255.255 too as a
+        // last-ditch fallback for routers that allow limited broadcast.
+        static List<IPAddress> GetBroadcastAddresses()
+        {
+            var result = new List<IPAddress>();
+            try
+            {
+                foreach (var nif in NetworkInterface.GetAllNetworkInterfaces())
+                {
+                    if (nif.OperationalStatus != OperationalStatus.Up) continue;
+                    if (nif.NetworkInterfaceType == NetworkInterfaceType.Loopback) continue;
+
+                    var props = nif.GetIPProperties();
+                    foreach (var ua in props.UnicastAddresses)
+                    {
+                        if (ua.Address.AddressFamily != AddressFamily.InterNetwork) continue;
+                        if (ua.IPv4Mask == null) continue;
+                        byte[] addr = ua.Address.GetAddressBytes();
+                        byte[] mask = ua.IPv4Mask.GetAddressBytes();
+                        if (addr.Length != 4 || mask.Length != 4) continue;
+                        var bcast = new byte[4];
+                        for (int i = 0; i < 4; i++) bcast[i] = (byte)(addr[i] | ~mask[i]);
+                        result.Add(new IPAddress(bcast));
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                Debug.LogWarning($"[Dio Discovery] adapter enumeration failed: {ex.Message}; falling back to 255.255.255.255 only.");
+            }
+            if (!result.Contains(IPAddress.Broadcast)) result.Add(IPAddress.Broadcast);
+            return result;
         }
 
         protected override DioDiscoveryResponse ProcessRequest(DioDiscoveryRequest request, IPEndPoint endpoint)

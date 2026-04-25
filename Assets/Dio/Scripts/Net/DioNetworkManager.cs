@@ -152,13 +152,14 @@ namespace Dio.Net
                 return;
             }
 
+            int total = _players.Count;
             int i = 0;
             foreach (var kv in _players)
             {
                 var conn = NetworkServer.connections.TryGetValue(kv.Key, out var c) ? c : null;
                 var player = kv.Value;
                 Vector3 pos; Quaternion rot;
-                ComputeStartTransform(defaultLevel, i, out pos, out rot);
+                ComputeStartTransform(defaultLevel, i, total, out pos, out rot);
 
                 var carGo = Instantiate(carPrefab, pos, rot);
                 NetworkServer.Spawn(carGo, conn);
@@ -172,7 +173,7 @@ namespace Dio.Net
             // testing without the lobby).
             if (_players.Count == 0 && soloBypass)
             {
-                ComputeStartTransform(defaultLevel, 0, out var pos, out var rot);
+                ComputeStartTransform(defaultLevel, 0, 1, out var pos, out var rot);
                 var carGo = Instantiate(carPrefab, pos, rot);
                 NetworkServer.Spawn(carGo);
             }
@@ -225,6 +226,10 @@ namespace Dio.Net
             float trackW = defaultLevel.trackWidth;
             float spacing = trackW / (picked.Count + 1f);
 
+            // All boxes in this row share the same group id, so a player can
+            // only grab one of them per pass (PowerupHolder tracks consumed groups).
+            const int midRowGroupId = 1;
+
             for (int i = 0; i < picked.Count; i++)
             {
                 float lateral = -trackW * 0.5f + spacing * (i + 1);
@@ -232,24 +237,52 @@ namespace Dio.Net
                 var go = Instantiate(pu.powerupBoxPrefab, boxPos,
                     Quaternion.LookRotation(tangent, midDir));
                 var box = go.GetComponent<Dio.Powerups.PowerupBox>();
-                if (box != null) box.forceKind = picked[i];
+                if (box != null)
+                {
+                    box.forceKind = picked[i];
+                    box.groupId = midRowGroupId;
+                }
                 NetworkServer.Spawn(go);
             }
 
             Debug.Log($"[Dio] Mid-track row spawned: {string.Join(", ", picked)}");
         }
 
-        static void ComputeStartTransform(Dio.Level.LevelData level, int slot, out Vector3 pos, out Quaternion rot)
+        // Up to 3 cars per row, additional rows fold backward along the tangent.
+        // Within each row the cars are centered around the track midline so a
+        // partial last row (e.g. 2 cars in a 5-player race) still looks symmetric.
+        // Chassis pivot lands exactly on the surface — wheels touch ground
+        // immediately because the prefab's WheelCollider Y is wheelRadius +
+        // suspensionDistance × suspensionTargetPos.
+        static void ComputeStartTransform(Dio.Level.LevelData level, int slot, int totalPlayers,
+                                          out Vector3 pos, out Quaternion rot)
         {
+            const int perRow = 3;
+            const float forwardSpacing = 4.5f;
+
             Vector3 startDir = level.points[0].directionFromCenter.normalized;
             Vector3 nextDir  = level.points[1].directionFromCenter.normalized;
+            Vector3 tangent  = Dio.Level.GeodesicUtil.TangentAt(startDir, nextDir);
+            Vector3 right    = Vector3.Cross(startDir, tangent).normalized;
 
-            // Stagger slots ~2 m to the side along the start tangent.
-            Vector3 tangent = Dio.Level.GeodesicUtil.TangentAt(startDir, nextDir);
-            Vector3 right = Vector3.Cross(startDir, tangent).normalized;
-            float lateral = (slot % 2 == 0 ? -1f : 1f) * (2f * (slot / 2 + 1));
+            int row = slot / perRow;
+            int colInRow = slot - row * perRow;
+            int totalRows = (totalPlayers + perRow - 1) / perRow;
+            int rowCount = (row == totalRows - 1) ? (totalPlayers - row * perRow) : perRow;
+            if (rowCount <= 0) rowCount = 1;
 
-            pos = startDir * level.planetRadius + startDir * 1.5f + right * lateral;
+            // rowCount=3 → cols are -1, 0, +1; rowCount=2 → -0.5, +0.5; rowCount=1 → 0.
+            float colOffset = colInRow - (rowCount - 1) * 0.5f;
+            float lateralSpacing = level.trackWidth * 0.25f;
+            float lateral = colOffset * lateralSpacing;
+
+            // Rows behind the start line walk backward along the tangent.
+            float backward = -row * forwardSpacing;
+
+            // Tiny radial clearance so the wheels settle on first frame instead of
+            // embedding into the planet collider.
+            Vector3 surface = startDir * level.planetRadius + startDir * 0.05f;
+            pos = surface + right * lateral + tangent * backward;
             rot = Quaternion.LookRotation(tangent, startDir);
         }
 

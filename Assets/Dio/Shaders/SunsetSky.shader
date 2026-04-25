@@ -64,6 +64,7 @@ Shader "Dio/SunsetSky"
             float  _CloudScale;
             float  _CloudSpeed;
             float  _CloudDensity;
+            float  _DioTime; // global from Dio.Common.NetworkTimeBinder
 
             // Hash + 3D value noise + fbm. Cheap, no textures.
             float hash13(float3 p)
@@ -141,7 +142,11 @@ Shader "Dio/SunsetSky"
                 // pole, no basis-flip glitches when the player crosses an axis.
                 float skyMask = smoothstep(0.0, 0.18, upDot);
                 float3 cloudPos = dir * _CloudScale;
-                cloudPos += float3(_Time.y * _CloudSpeed, _Time.y * _CloudSpeed * 0.6, 0);
+                // _DioTime is the synced NetworkTime; falls back to _Time.y if the
+                // NetworkTimeBinder isn't running (single-player editor preview).
+                float dioT = _DioTime;
+                if (dioT == 0.0) dioT = _Time.y;
+                cloudPos += float3(dioT * _CloudSpeed, dioT * _CloudSpeed * 0.6, 0);
                 float n  = fbm(cloudPos);
                 float ns = fbm(cloudPos * 0.5 + 13.0); // second octave for inside-cloud shadow
                 float cmask = smoothstep(_CloudCoverage - 0.08, _CloudCoverage + 0.18, n);

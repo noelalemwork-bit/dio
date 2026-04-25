@@ -88,11 +88,26 @@ namespace Dio.Player
         float _currentSteer;
         System.Action<InputAction.CallbackContext> _cycleHandler;
 
+        // Wheel-visual state (runs on every peer — client cars are kinematic so
+        // we can't use WheelCollider.GetWorldPose; instead derive spin from
+        // the rigidbody / transform velocity and steer from a synced source).
+        float _spinAngleDeg;
+        Vector3 _visualPrevPos;
+        bool _visualPrevPosSeeded;
+        Dio.Player.DioCar _dioCar;
+        float _wheelRadiusCached = 0.4f;
+
+        public float CurrentSteerAngle => _currentSteer;
+
         void Awake()
         {
             _rb = GetComponent<Rigidbody>();
             _gravity = GetComponent<SphericalGravity>();
+            _dioCar = GetComponent<Dio.Player.DioCar>();
             _rb.centerOfMass = new Vector3(0f, -0.4f, 0f);
+            // Cache wheel radius from one of the wheels for spin computation.
+            if (frontAxle != null && frontAxle.left != null) _wheelRadiusCached = frontAxle.left.radius;
+            else if (rearAxle != null && rearAxle.left != null) _wheelRadiusCached = rearAxle.left.radius;
 
             if (moveAction != null) moveAction.action.Enable();
             if (brakeAction != null) brakeAction.action.Enable();
@@ -116,6 +131,43 @@ namespace Dio.Player
             // Tab to cycle camera if no input action is bound.
             if (cameraCycleAction == null && Keyboard.current != null && Keyboard.current.tabKey.wasPressedThisFrame)
                 OnCameraCycleRequested?.Invoke();
+
+            UpdateWheelVisuals(Time.deltaTime);
+        }
+
+        // Runs on every peer. Drives wheel local rotation from a logical
+        // model: spin around chassis-X by accumulated angle (proportional to
+        // forward speed / wheel radius), steer around chassis-Y by either the
+        // controller's local steering (server) or a synced steer angle from
+        // DioCar (clients). Position is left to the parent transform — the
+        // visual root is parented to the car root so it follows automatically.
+        void UpdateWheelVisuals(float dt)
+        {
+            if (dt < 1e-5f) return;
+
+            if (!_visualPrevPosSeeded) { _visualPrevPos = transform.position; _visualPrevPosSeeded = true; return; }
+
+            Vector3 delta = transform.position - _visualPrevPos;
+            _visualPrevPos = transform.position;
+            float fwdSpeed = Vector3.Dot(delta, transform.forward) / dt;
+            float spinDeltaDeg = (fwdSpeed / Mathf.Max(0.01f, _wheelRadiusCached)) * Mathf.Rad2Deg * dt;
+            _spinAngleDeg = (_spinAngleDeg + spinDeltaDeg) % 360f;
+
+            // Steer source: server's controller writes _currentSteer + DioCar.steerAngle SyncVar;
+            // remote clients only have the SyncVar. Prefer the SyncVar when available so all
+            // peers see the same value — otherwise fall back to the local controller's value.
+            float steerDeg = _dioCar != null ? _dioCar.steerAngle : _currentSteer;
+
+            ApplyWheelLocalRotation(frontAxle, _spinAngleDeg, steerDeg);
+            ApplyWheelLocalRotation(rearAxle, _spinAngleDeg, 0f);
+        }
+
+        static void ApplyWheelLocalRotation(Axle axle, float spinDeg, float steerDeg)
+        {
+            if (axle == null) return;
+            var rot = Quaternion.Euler(spinDeg, steerDeg, 0f);
+            if (axle.leftVisual  != null) axle.leftVisual.localRotation  = rot;
+            if (axle.rightVisual != null) axle.rightVisual.localRotation = rot;
         }
 
         public Inputs ReadLocalInputsNow()
@@ -187,8 +239,9 @@ namespace Dio.Player
             ApplyMotor(frontAxle, frontAxle.drives ? drive : 0f, brakeAmt);
             ApplyMotor(rearAxle, rearAxle.drives ? drive : 0f, brakeAmt + hbAmt);
 
-            UpdateVisuals(frontAxle);
-            UpdateVisuals(rearAxle);
+            // Wheel VISUAL spin/steer is driven by Update() on every peer
+            // (the server-only WheelCollider pose path was unreliable for
+            // remote clients whose rigidbody is kinematic).
 
             Vector3 up = _gravity != null ? _gravity.PlanetUp : transform.up;
             Vector3 angVel = _rb.angularVelocity;
@@ -219,19 +272,6 @@ namespace Dio.Player
         {
             if (axle.left != null) { axle.left.motorTorque = motor; axle.left.brakeTorque = brake; }
             if (axle.right != null) { axle.right.motorTorque = motor; axle.right.brakeTorque = brake; }
-        }
-
-        static void UpdateVisuals(Axle axle)
-        {
-            UpdateOne(axle.left, axle.leftVisual);
-            UpdateOne(axle.right, axle.rightVisual);
-        }
-
-        static void UpdateOne(WheelCollider wc, Transform vis)
-        {
-            if (wc == null || vis == null) return;
-            wc.GetWorldPose(out Vector3 p, out Quaternion r);
-            vis.SetPositionAndRotation(p, r);
         }
 
         static bool WheelGrounded(Axle axle)

@@ -21,6 +21,11 @@ namespace Dio.Player
         [SyncVar(hook = nameof(OnColorChanged))] public int colorIndex;
         [SyncVar] public string ownerName = "";
 
+        // Server-set each FixedUpdate from the controller; clients read this to
+        // animate the front wheels' steer angle without needing WheelCollider
+        // physics (which doesn't simulate on a kinematic rb).
+        [SyncVar] public float steerAngle;
+
         [Tooltip("How often the local player sends its inputs to the server (Hz).")]
         public float inputSendRate = 30f;
 
@@ -110,6 +115,8 @@ namespace Dio.Player
             var inputs = _latestInputs;
             if (_stateMachine != null) _stateMachine.ModifyInputs(ref inputs);
             _car.currentInputs = inputs;
+            // Publish the controller's current steering for client-side wheel visuals.
+            steerAngle = _car.CurrentSteerAngle;
         }
 
         // ---- Color sync ----

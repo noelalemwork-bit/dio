@@ -14,6 +14,11 @@ namespace Dio.Powerups
         [SyncVar(hook = nameof(OnHeldChanged))] public PowerupKind held = PowerupKind.None;
         [SyncVar] public int charges; // for Triple Boost
 
+        // Group IDs of powerup-rows already consumed by this player. PowerupBox
+        // checks this against its own groupId before granting — so a single
+        // mid-track row only ever gives one powerup per car.
+        readonly SyncList<int> consumedGroups = new SyncList<int>();
+
         public InputActionReference activateAction;
 
         public System.Action<PowerupKind> OnHeldChangedClient;
@@ -59,6 +64,14 @@ namespace Dio.Powerups
             held = kind;
             charges = Mathf.Max(1, chargesIfStacked);
         }
+
+        [Server] public bool HasConsumedGroup(int gid) => gid != 0 && consumedGroups.Contains(gid);
+        [Server] public void MarkGroupConsumed(int gid)
+        {
+            if (gid == 0 || consumedGroups.Contains(gid)) return;
+            consumedGroups.Add(gid);
+        }
+        [Server] public void ClearConsumedGroups() => consumedGroups.Clear();
 
         void OnHeldChanged(PowerupKind oldVal, PowerupKind newVal)
         {

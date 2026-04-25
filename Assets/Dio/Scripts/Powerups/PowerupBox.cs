@@ -10,6 +10,8 @@ namespace Dio.Powerups
         [SyncVar(hook = nameof(OnAvailableChanged))] public bool available = true;
         [Tooltip("If non-None, this box always grants this kind. None = pick at random from PowerupRegistry.")]
         [SyncVar] public PowerupKind forceKind = PowerupKind.None;
+        [Tooltip("Boxes sharing the same non-zero groupId can only be consumed once per player. 0 = no constraint.")]
+        [SyncVar] public int groupId = 0;
         public float respawnDelay = 5f;
 
         Renderer[] _renderers;
@@ -33,11 +35,16 @@ namespace Dio.Powerups
             var holder = car.GetComponent<PowerupHolder>();
             if (holder == null) return;
 
+            // Group constraint: a single mid-track row hands out one powerup per car.
+            if (groupId != 0 && holder.HasConsumedGroup(groupId)) return;
+
             var kind = forceKind != PowerupKind.None ? forceKind : PowerupRegistry.RandomFromBox();
             if (kind == PowerupKind.None) return;
 
             if (kind == PowerupKind.TripleBoost) holder.Grant(PowerupKind.Boost, 3);
             else holder.Grant(kind);
+
+            if (groupId != 0) holder.MarkGroupConsumed(groupId);
 
             available = false;
             Invoke(nameof(Respawn), respawnDelay);

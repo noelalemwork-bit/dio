@@ -5,8 +5,9 @@ namespace Dio.Common
     /// Tiny convenience wrapper over PlayerPrefs for local-only player profile data.
     public static class LocalPrefs
     {
-        const string NameKey = "dio.player.name";
-        const string ColorKey = "dio.player.color";
+        const string NameKey   = "dio.player.name";
+        const string ColorKey  = "dio.player.color";
+        const string DirectIpKey = "dio.lastDirectIp";
 
         public static string PlayerName
         {
@@ -18,6 +19,12 @@ namespace Dio.Common
         {
             get => PlayerPrefs.GetInt(ColorKey, 0);
             set { PlayerPrefs.SetInt(ColorKey, value); PlayerPrefs.Save(); }
+        }
+
+        public static string LastDirectIp
+        {
+            get => PlayerPrefs.GetString(DirectIpKey, string.Empty);
+            set { PlayerPrefs.SetString(DirectIpKey, value ?? string.Empty); PlayerPrefs.Save(); }
         }
     }
 }

@@ -22,6 +22,7 @@ Shader "Dio/MysteryBox"
 
             float4 _BaseColor;
             float _Shimmer, _Speed;
+            float _DioTime; // global from Dio.Common.NetworkTimeBinder
 
             float3 hsv2rgb(float3 c)
             {
@@ -41,11 +42,13 @@ Shader "Dio/MysteryBox"
 
             half4 frag(v2f i) : SV_Target
             {
-                float h = frac(_Time.y * _Speed + (i.oPos.x + i.oPos.y + i.oPos.z) * 0.35);
+                float t = _DioTime; if (t == 0.0) t = _Time.y;
+                float h = frac(t * _Speed + (i.oPos.x + i.oPos.y + i.oPos.z) * 0.35);
                 half3 shimmer = hsv2rgb(float3(h, 0.65, 1.0));
                 half3 col = lerp(_BaseColor.rgb, shimmer, _Shimmer);
                 float ndl = saturate(dot(normalize(i.wNormal), normalize(float3(0.4, 1.0, 0.2))));
-                col *= 0.6 + 0.55 * ndl;
+                // Higher ambient floor so the box stays readable even from below.
+                col *= 0.85 + 0.30 * ndl;
                 return half4(col, 1);
             }
             ENDCG
