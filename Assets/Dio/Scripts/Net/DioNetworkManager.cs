@@ -36,6 +36,11 @@ namespace Dio.Net
 
         // Bool argument: true if this peer is the server (host or dedicated).
         public static System.Action<bool, RaceStartMessage> OnRaceStarted;
+        public static System.Action<RaceWonMessage> OnRaceWon;
+
+        bool _raceActive;
+        const float WinDistanceThreshold = 8f;     // unit distance for "crossed the finish"
+        const float DefaultCleanupDelaySec = 5.5f; // duration of the win screen before cleanup
 
         public override void Awake()
         {
@@ -53,6 +58,7 @@ namespace Dio.Net
         {
             base.OnStartClient();
             NetworkClient.ReplaceHandler<RaceStartMessage>(OnClientRaceStart);
+            NetworkClient.ReplaceHandler<RaceWonMessage>(OnClientRaceWon);
             RegisterAllNetworkedPrefabs();
         }
 
@@ -126,10 +132,19 @@ namespace Dio.Net
             if (bootstrap != null && defaultLevel != null)
                 bootstrap.BuildVisualScene(defaultLevel);
 
+            // Reset all server-side per-race state on every player object.
+            foreach (var p in _players.Values)
+            {
+                if (p == null) continue;
+                var holder = p.GetComponent<Dio.Powerups.PowerupHolder>();
+                if (holder != null) holder.ClearConsumedGroups();
+            }
+
             // Server-side spawning of cars. Client-side bootstrap (planet, camera)
             // is triggered via OnRaceStarted, which fires from the message handler.
             ServerSpawnCarsForAllPlayers();
             ServerSpawnMidTrackPowerups();
+            _raceActive = true;
 
             // Tell every client (host's local client included).
             NetworkServer.SendToAll(msg);
@@ -291,6 +306,101 @@ namespace Dio.Net
             // Fires on every client, including the host's local client.
             Debug.Log($"[Dio] Client received RaceStartMessage. isServer={NetworkServer.active} startTime={msg.startServerTime:0.000}");
             OnRaceStarted?.Invoke(NetworkServer.active, msg);
+        }
+
+        void OnClientRaceWon(RaceWonMessage msg)
+        {
+            Debug.Log($"[Dio] Client received RaceWonMessage. winner={msg.winnerName} colour={msg.winnerColorIndex}");
+            // Lock every car's input on this peer immediately (server already
+            // ignores their inputs, but locking the local controller too prevents
+            // the brief "spinning wheels with no movement" frame).
+            foreach (var ni in NetworkClient.spawned.Values)
+            {
+                var car = ni != null ? ni.GetComponent<Dio.Player.ArcadeCarController>() : null;
+                if (car != null) car.inputsLocked = true;
+            }
+            OnRaceWon?.Invoke(msg);
+        }
+
+        // ----- server-side win detection + cleanup -----
+
+        void Update()
+        {
+            if (!NetworkServer.active || !_raceActive) return;
+            if (defaultLevel == null || !defaultLevel.HasMinimum) return;
+
+            // Distance proxy for "crossed the finish line" until the M2
+            // arc-length-along-track tracker lands.
+            Vector3 finishWorld = defaultLevel.Finish.directionFromCenter.normalized * defaultLevel.planetRadius;
+            var planet = Dio.Level.RaceBootstrap.CurrentPlanet;
+            if (planet != null) finishWorld += planet.transform.position;
+
+            foreach (var ni in NetworkServer.spawned.Values)
+            {
+                var car = ni != null ? ni.GetComponent<DioCar>() : null;
+                if (car == null) continue;
+                if ((car.transform.position - finishWorld).sqrMagnitude > WinDistanceThreshold * WinDistanceThreshold)
+                    continue;
+
+                // Crossed the finish — winner is the connection that owns this car.
+                DioPlayer winnerPlayer = null;
+                if (car.connectionToClient != null
+                    && _players.TryGetValue(car.connectionToClient.connectionId, out var p))
+                    winnerPlayer = p;
+
+                ServerEndRace(winnerPlayer, car);
+                return;
+            }
+        }
+
+        [Server]
+        void ServerEndRace(DioPlayer winner, DioCar winnerCar)
+        {
+            if (!_raceActive) return;
+            _raceActive = false;
+
+            // Lock every car's inputs immediately so the post-win frames don't
+            // see any drift from queued client commands.
+            foreach (var ni in NetworkServer.spawned.Values)
+            {
+                var ac = ni != null ? ni.GetComponent<Dio.Player.ArcadeCarController>() : null;
+                if (ac != null) ac.inputsLocked = true;
+            }
+
+            string name = winner != null && !string.IsNullOrEmpty(winner.playerName)
+                ? winner.playerName
+                : (winnerCar != null ? winnerCar.ownerName : "?");
+            int color = winner != null ? winner.colorIndex
+                                       : (winnerCar != null ? winnerCar.colorIndex : 0);
+
+            var msg = new RaceWonMessage { winnerName = name, winnerColorIndex = color, cleanupDelay = DefaultCleanupDelaySec };
+            NetworkServer.SendToAll(msg);
+            // Server's local NetworkClient receives the message via the standard pipeline.
+            // For dedicated-server (no local client) we still need to schedule cleanup.
+            if (!NetworkClient.active) OnRaceWon?.Invoke(msg);
+
+            Invoke(nameof(ServerCleanupRace), DefaultCleanupDelaySec);
+            Debug.Log($"[Dio] Server declared winner '{name}'. Cleanup in {DefaultCleanupDelaySec}s.");
+        }
+
+        // Tear down all per-race networked state. Player objects (DioPlayer)
+        // and the network manager itself stay so the lobby can resume — but
+        // every car, every powerup box, and every spawned obstacle goes.
+        [Server]
+        void ServerCleanupRace()
+        {
+            var toDestroy = new System.Collections.Generic.List<NetworkIdentity>();
+            foreach (var ni in NetworkServer.spawned.Values)
+            {
+                if (ni == null) continue;
+                if (ni.GetComponent<DioPlayer>() != null) continue; // keep lobby player objects
+                toDestroy.Add(ni);
+            }
+            foreach (var ni in toDestroy)
+            {
+                if (ni != null) NetworkServer.Destroy(ni.gameObject);
+            }
+            Debug.Log($"[Dio] Server cleanup: destroyed {toDestroy.Count} per-race objects.");
         }
 
         // ---------- Discovery convenience ----------

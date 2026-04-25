@@ -53,6 +53,12 @@ namespace Dio.UI
         [Tooltip("Shown when the race begins (minimap + powerup slot + speed).")]
         public GameObject hudRoot;
 
+        [Header("Win banner")]
+        public GameObject winPanel;
+        public TMP_Text winLabel;
+        public Image winColorChip;
+        public UIConfetti winConfetti;
+
         readonly Dictionary<long, DioDiscoveryResponse> _discoveredServers = new();
         readonly List<GameObject> _spawnedBrowserRows = new();
         readonly List<GameObject> _spawnedLobbyRows = new();
@@ -102,6 +108,8 @@ namespace Dio.UI
 
             DioPlayer.OnRosterChanged += RefreshLobby;
             DioNetworkManager.OnRaceStarted += OnRaceStartedLocally;
+            DioNetworkManager.OnRaceWon     += OnRaceWonLocally;
+            if (winPanel != null) winPanel.SetActive(false);
 
             RefreshGating();
             ShowIdle();
@@ -112,6 +120,7 @@ namespace Dio.UI
         {
             DioPlayer.OnRosterChanged -= RefreshLobby;
             DioNetworkManager.OnRaceStarted -= OnRaceStartedLocally;
+            DioNetworkManager.OnRaceWon     -= OnRaceWonLocally;
         }
 
         // ---------- Top bar ----------
@@ -365,6 +374,7 @@ namespace Dio.UI
 
         void OnRaceStartedLocally(bool _, RaceStartMessage __)
         {
+            if (winPanel != null) winPanel.SetActive(false);
             if (hudRoot != null) hudRoot.SetActive(true);
 
             if (menuRoot != null)
@@ -388,6 +398,32 @@ namespace Dio.UI
                 if (hudRoot != null && child == hudRoot) continue;
                 child.SetActive(false);
             }
+        }
+
+        void OnRaceWonLocally(RaceWonMessage msg)
+        {
+            if (winPanel != null)
+            {
+                winPanel.SetActive(true);
+                if (winLabel != null) winLabel.text = $"{msg.winnerName}\nWINS!";
+                if (winColorChip != null) winColorChip.color = ColorPalette.Get(msg.winnerColorIndex);
+                if (winConfetti != null) winConfetti.Burst();
+            }
+
+            // After the cleanup delay, swap back to the lobby. Server-side cleanup
+            // (NetworkServer.Destroy of cars / boxes / obstacles) is scheduled in
+            // DioNetworkManager.ServerCleanupRace; this just restores the local UI.
+            float delay = Mathf.Max(0.1f, msg.cleanupDelay);
+            CancelInvoke(nameof(ReturnToLobbyAfterWin));
+            Invoke(nameof(ReturnToLobbyAfterWin), delay);
+        }
+
+        void ReturnToLobbyAfterWin()
+        {
+            if (winPanel != null) winPanel.SetActive(false);
+            if (hudRoot != null) hudRoot.SetActive(false);
+            if (menuRoot != null) menuRoot.SetActive(true);
+            ShowLobby();
         }
 
         static void ClearChildren(Transform root, List<GameObject> tracked)

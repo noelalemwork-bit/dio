@@ -78,6 +78,9 @@ namespace Dio.Player
 
         public Inputs currentInputs;
 
+        [Tooltip("When true, all inputs are forced to zero — used to freeze the car after the race ends.")]
+        public bool inputsLocked;
+
         // Read-out for camera + UI.
         public float SpeedMps { get; private set; }
         public bool AnyWheelGrounded { get; private set; }
@@ -211,6 +214,7 @@ namespace Dio.Player
         void FixedUpdate()
         {
             if (readLocalInput) currentInputs = ReadLocalInputsNow();
+            if (inputsLocked) currentInputs = default;
 
             Vector2 move = currentInputs.steerThrottle;
             bool brake = currentInputs.brake;

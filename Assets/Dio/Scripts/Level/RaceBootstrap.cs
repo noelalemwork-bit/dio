@@ -39,11 +39,51 @@ namespace Dio.Level
         GameObject _track;
         Camera _cam;
 
-        void Awake() { DioNetworkManager.OnRaceStarted += OnRaceStarted; }
-        void OnDestroy() { DioNetworkManager.OnRaceStarted -= OnRaceStarted; }
+        void Awake()
+        {
+            DioNetworkManager.OnRaceStarted += OnRaceStarted;
+            DioNetworkManager.OnRaceWon     += OnRaceWon;
+        }
+
+        void OnDestroy()
+        {
+            DioNetworkManager.OnRaceStarted -= OnRaceStarted;
+            DioNetworkManager.OnRaceWon     -= OnRaceWon;
+        }
+
         void Start() { if (autoStartInEditor) BuildVisualScene(defaultLevel); }
 
         void OnRaceStarted(bool _, RaceStartMessage __) => BuildVisualScene(defaultLevel);
+
+        void OnRaceWon(RaceWonMessage msg)
+        {
+            // Schedule local-scene teardown to align with the server's cleanup.
+            Invoke(nameof(CleanupLocalScene), Mathf.Max(0.1f, msg.cleanupDelay));
+        }
+
+        // Destroys the planet + track + camera attachment. Per-car NetworkIdentities
+        // are torn down by NetworkServer.Destroy on the server side, so we don't
+        // touch them here.
+        public void CleanupLocalScene()
+        {
+            if (_track != null) { Destroy(_track); _track = null; }
+            if (_planet != null) { Destroy(_planet); _planet = null; }
+            CurrentPlanet = null;
+            CurrentLevel = null;
+            CurrentTrack = null;
+
+            // Detach the race camera so it stops following a destroyed car.
+            if (_cam != null)
+            {
+                var rc = _cam.GetComponent<RaceCamera>();
+                if (rc != null)
+                {
+                    rc.target = null;
+                    rc.car = null;
+                    rc.gravity = null;
+                }
+            }
+        }
 
         void Update()
         {

@@ -499,14 +499,16 @@ namespace Dio.UI.EditorTools
             // a dedicated MinimapCam camera pinned above the local player.
             // Cars + powerup boxes appear as UI markers parented to MarkerRoot
             // (spawned dynamically by MinimapRenderer at runtime) so the actual
-            // RT only contains the planet + track strip.
+            // RT only contains the planet + track strip. Sized 1.5× wider than
+            // the original 220 — and the camera ortho is bigger too — so other
+            // players actually fit in view.
             var minimapGo = new GameObject("Minimap", typeof(RectTransform), typeof(RawImage));
             minimapGo.transform.SetParent(hudRoot.transform, false);
             var minimapRt = (RectTransform)minimapGo.transform;
             minimapRt.anchorMin = new Vector2(0, 1); minimapRt.anchorMax = new Vector2(0, 1);
             minimapRt.pivot = new Vector2(0, 1);
             minimapRt.anchoredPosition = new Vector2(24, -24);
-            minimapRt.sizeDelta = new Vector2(220, 220);
+            minimapRt.sizeDelta = new Vector2(330, 330);
             var minimapImage = minimapGo.GetComponent<RawImage>();
             minimapImage.color = Color.white;
             minimapImage.raycastTarget = false;
@@ -529,6 +531,8 @@ namespace Dio.UI.EditorTools
             mr.localPlayerMarker = LoadSvg("hud_player_marker");
             mr.remotePlayerMarker = LoadSvg("hud_player_marker");
             mr.powerupMarker = LoadSvg("hud_powerup_box");
+            mr.markerSize = 36f;       // bigger so they're easy to spot at a glance
+            mr.orthoSize = 130f;       // zoom out — covers a meaningful slice of the planet
 
             // Powerup slot (bottom-left). Frame is the dashed "?" SVG; the icon
             // sprite that overlays gets switched at runtime by RaceHUD.
@@ -684,6 +688,58 @@ namespace Dio.UI.EditorTools
             posList.font = TMP_Settings.defaultFontAsset;
             posList.lineSpacing = 4f;
 
+            // ---- Win panel (siblings the menu/hud roots; sits ON TOP of both) ----
+            // Independent of menuRoot/hudRoot because the win UI replaces both
+            // for ~5 seconds before the lobby is restored.
+            var winPanel = AddPanel(canvasGo.transform, "WinPanel", new Color(0, 0, 0, 0.55f));
+            var winRt = (RectTransform)winPanel.transform;
+            winRt.anchorMin = Vector2.zero; winRt.anchorMax = Vector2.one;
+            winRt.offsetMin = winRt.offsetMax = Vector2.zero;
+            winPanel.SetActive(false);
+
+            // SVG banner background, centered.
+            var winBgGo = new GameObject("Banner", typeof(RectTransform));
+            winBgGo.transform.SetParent(winPanel.transform, false);
+            var winBgRt = (RectTransform)winBgGo.transform;
+            winBgRt.anchorMin = new Vector2(0.5f, 0.5f); winBgRt.anchorMax = new Vector2(0.5f, 0.5f);
+            winBgRt.sizeDelta = new Vector2(720, 280);
+            SvgIconLoader.AttachIcon(winBgGo, LoadSvg("winner_banner"), Color.white);
+
+            // Player color chip (top-center of banner).
+            var chipGo = new GameObject("ColorChip", typeof(RectTransform), typeof(Image));
+            chipGo.transform.SetParent(winPanel.transform, false);
+            var chipRt = (RectTransform)chipGo.transform;
+            chipRt.anchorMin = new Vector2(0.5f, 0.5f); chipRt.anchorMax = new Vector2(0.5f, 0.5f);
+            chipRt.sizeDelta = new Vector2(48, 48);
+            chipRt.anchoredPosition = new Vector2(0, 130);
+            var chipImg = chipGo.GetComponent<Image>();
+            chipImg.color = Color.white;
+            chipImg.raycastTarget = false;
+
+            // Winner label.
+            var winLabelGo = new GameObject("Label", typeof(RectTransform));
+            winLabelGo.transform.SetParent(winPanel.transform, false);
+            var winLabelRt = (RectTransform)winLabelGo.transform;
+            winLabelRt.anchorMin = new Vector2(0.5f, 0.5f); winLabelRt.anchorMax = new Vector2(0.5f, 0.5f);
+            winLabelRt.sizeDelta = new Vector2(680, 200);
+            winLabelRt.anchoredPosition = new Vector2(0, -10);
+            var winLabel = winLabelGo.AddComponent<TextMeshProUGUI>();
+            winLabel.text = "—";
+            winLabel.fontSize = 72;
+            winLabel.fontStyle = FontStyles.Bold;
+            winLabel.alignment = TextAlignmentOptions.Center;
+            winLabel.color = Color.white;
+            winLabel.font = TMP_Settings.defaultFontAsset;
+
+            // Confetti host (full-rect; UIConfetti spawns children here).
+            var confettiHostGo = new GameObject("Confetti", typeof(RectTransform));
+            confettiHostGo.transform.SetParent(winPanel.transform, false);
+            var confettiRt = (RectTransform)confettiHostGo.transform;
+            confettiRt.anchorMin = Vector2.zero; confettiRt.anchorMax = Vector2.one;
+            confettiRt.offsetMin = Vector2.zero; confettiRt.offsetMax = Vector2.zero;
+            var confetti = confettiHostGo.AddComponent<Dio.UI.UIConfetti>();
+            confetti.pieceSprite = LoadSvg("confetti_piece");
+
             // RaceHUD component, wired with all the HUD refs + powerup icon map.
             var hudCtrl = hudRoot.AddComponent<RaceHUD>();
             hudCtrl.minimapRoot = minimapRt;
@@ -724,6 +780,10 @@ namespace Dio.UI.EditorTools
             ctrl.discovery = netInstance.GetComponent<DioNetworkDiscovery>();
             ctrl.menuRoot = menuRoot;
             ctrl.hudRoot = hudRoot;
+            ctrl.winPanel = winPanel;
+            ctrl.winLabel = winLabel;
+            ctrl.winColorChip = chipImg;
+            ctrl.winConfetti = confetti;
 
             EditorSceneManager.SaveScene(scene, MainScenePath);
 

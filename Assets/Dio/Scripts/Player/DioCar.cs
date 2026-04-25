@@ -61,10 +61,18 @@ namespace Dio.Player
         public override void OnStartClient()
         {
             ApplyColor(colorIndex);
-            // On clients, the rigidbody is driven by NetworkTransform; the
-            // server's authoritative position is interpolated to us. Keep it
-            // kinematic on remote clients so its physics doesn't double-step.
-            if (!isServer) _rb.isKinematic = true;
+            // On non-server clients, the rigidbody is driven by NetworkTransform.
+            // Force the strict "purely kinematic, no physics interpolation" config
+            // — without this, a kinematic-rb left on Interpolate / ContinuousDynamic
+            // can stutter, no-op transform writes, or stay frozen when the server
+            // sends a snapshot. Mirror's docs: kinematic clients should be Discrete
+            // + None for clean transform-driven sync.
+            if (!isServer)
+            {
+                _rb.isKinematic = true;
+                _rb.interpolation = RigidbodyInterpolation.None;
+                _rb.collisionDetectionMode = CollisionDetectionMode.Discrete;
+            }
             Debug.Log($"[DioCar] OnStartClient netId={netId} isServer={isServer} isOwned={isOwned} kinematic={_rb.isKinematic}");
         }
 

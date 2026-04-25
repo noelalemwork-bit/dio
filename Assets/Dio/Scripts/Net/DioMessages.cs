@@ -23,4 +23,11 @@ namespace Dio.Net
         public int seed;
         public double startServerTime;
     }
+
+    public struct RaceWonMessage : NetworkMessage
+    {
+        public string winnerName;
+        public int winnerColorIndex;
+        public float cleanupDelay; // seconds before clients return to lobby
+    }
 }

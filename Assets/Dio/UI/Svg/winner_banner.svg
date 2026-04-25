@@ -1,0 +1,32 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 600 240" width="600" height="240">
+  <!-- Sunburst rays -->
+  <g transform="translate(300 120)">
+    <g fill="#FFD24A" opacity="0.55">
+      <polygon points="0,-200 30,-60 -30,-60"/>
+      <polygon points="0,-200 30,-60 -30,-60" transform="rotate(45)"/>
+      <polygon points="0,-200 30,-60 -30,-60" transform="rotate(90)"/>
+      <polygon points="0,-200 30,-60 -30,-60" transform="rotate(135)"/>
+      <polygon points="0,-200 30,-60 -30,-60" transform="rotate(180)"/>
+      <polygon points="0,-200 30,-60 -30,-60" transform="rotate(225)"/>
+      <polygon points="0,-200 30,-60 -30,-60" transform="rotate(270)"/>
+      <polygon points="0,-200 30,-60 -30,-60" transform="rotate(315)"/>
+    </g>
+    <g fill="#F39B2A" opacity="0.55">
+      <polygon points="0,-180 22,-50 -22,-50" transform="rotate(22.5)"/>
+      <polygon points="0,-180 22,-50 -22,-50" transform="rotate(67.5)"/>
+      <polygon points="0,-180 22,-50 -22,-50" transform="rotate(112.5)"/>
+      <polygon points="0,-180 22,-50 -22,-50" transform="rotate(157.5)"/>
+      <polygon points="0,-180 22,-50 -22,-50" transform="rotate(202.5)"/>
+      <polygon points="0,-180 22,-50 -22,-50" transform="rotate(247.5)"/>
+      <polygon points="0,-180 22,-50 -22,-50" transform="rotate(292.5)"/>
+      <polygon points="0,-180 22,-50 -22,-50" transform="rotate(337.5)"/>
+    </g>
+  </g>
+  <!-- Banner ribbon -->
+  <path d="M50 60 L550 60 L520 180 L80 180 Z"
+        fill="#E0533D" stroke="#7E1F14" stroke-width="4" stroke-linejoin="round"/>
+  <path d="M50 60 L550 60 L545 80 L55 80 Z" fill="#FFFFFF" opacity="0.18"/>
+  <!-- Star -->
+  <polygon points="300,30 312,68 350,68 320,90 332,128 300,108 268,128 280,90 250,68 288,68"
+           fill="#F1D24D" stroke="#7E5A14" stroke-width="3" stroke-linejoin="round"/>
+</svg>
