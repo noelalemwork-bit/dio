@@ -296,6 +296,12 @@ namespace Dio.UI.EditorTools
             pu.tornadoPrefab    = AssetDatabase.LoadAssetAtPath<GameObject>("Assets/Dio/Prefabs/Powerups/Tornado.prefab");
             pu.powerupBoxPrefab = AssetDatabase.LoadAssetAtPath<GameObject>("Assets/Dio/Prefabs/Powerups/PowerupBox.prefab");
 
+            // Solo-test cheats. OFF by default; toggle "Enable Cheats" in
+            // the inspector at runtime to grant powerups via number keys
+            // 1-9 + 0. Lives on its own GO so the toggle is one click away.
+            var cheatsGo = new GameObject("PowerupCheats");
+            cheatsGo.AddComponent<Dio.Powerups.PowerupCheats>();
+
             // Canvas.
             var canvasGo = new GameObject("MainCanvas", typeof(RectTransform), typeof(Canvas), typeof(CanvasScaler), typeof(GraphicRaycaster));
             var canvas = canvasGo.GetComponent<Canvas>();
@@ -614,8 +620,17 @@ namespace Dio.UI.EditorTools
             mr.markerSize = 36f;       // bigger so they're easy to spot at a glance
             mr.orthoSize = 130f;       // zoom out — covers a meaningful slice of the planet
 
-            // Powerup slot (bottom-left). Frame is the dashed "?" SVG; the icon
-            // sprite that overlays gets switched at runtime by RaceHUD.
+            // Powerup slot (bottom-left). Layered children:
+            //   slotGo (frame: hud_powerup_box.svg via SvgIconLoader)
+            //     └ TimerMask  — circular Image (Filled/Radial360) + Mask
+            //          └ Icon — the held powerup's SVG, swapped by RaceHUD
+            //   The Mask's `showMaskGraphic = false` so the wedge itself is
+            //   invisible; only its alpha-shape clips the child Icon. As the
+            //   timer drains (fillAmount 1 → 0), the visible portion of the
+            //   icon shrinks like a clock hand sweeping it away.
+            //
+            //   Charges label sits on the slot itself (outside the mask) so
+            //   the "x3" stays readable even when the timer wedge is small.
             var slotGo = new GameObject("PowerupSlot", typeof(RectTransform));
             slotGo.transform.SetParent(hudRoot.transform, false);
             var slotRt = (RectTransform)slotGo.transform;
@@ -625,15 +640,42 @@ namespace Dio.UI.EditorTools
             slotRt.sizeDelta = new Vector2(120, 120);
             SvgIconLoader.AttachIcon(slotGo, LoadSvg("hud_powerup_box"), Color.white);
 
-            var slotIconGo = new GameObject("Icon", typeof(RectTransform), typeof(Image));
-            slotIconGo.transform.SetParent(slotGo.transform, false);
+            // Mask host — circular Image with Filled/Radial360. Used as a Mask
+            // so the icon child is clipped to the visible wedge AND drawn so
+            // the player can SEE the timer drain. With Mask.showMaskGraphic
+            // = true, the colored wedge renders BEHIND the icon child; the
+            // icon is on top, clipped to the same shape. As fillAmount drains
+            // from 1 → 0, both shrink in lockstep.
+            var slotMaskGo = new GameObject("TimerMask", typeof(RectTransform), typeof(Image), typeof(Mask));
+            slotMaskGo.transform.SetParent(slotGo.transform, false);
+            var slotMaskRt = (RectTransform)slotMaskGo.transform;
+            slotMaskRt.anchorMin = Vector2.zero; slotMaskRt.anchorMax = Vector2.one;
+            slotMaskRt.offsetMin = new Vector2(10, 10); slotMaskRt.offsetMax = new Vector2(-10, -10);
+            var slotTimerImg = slotMaskGo.GetComponent<Image>();
+            slotTimerImg.sprite = GetOrCreateCircleSprite();
+            // Soft amber backdrop so the wedge is clearly visible behind the
+            // icon — bright enough to read, transparent enough not to hide
+            // the icon's own colors.
+            slotTimerImg.color = new Color(1f, 0.78f, 0.20f, 0.85f);
+            slotTimerImg.type = Image.Type.Filled;
+            slotTimerImg.fillMethod = Image.FillMethod.Radial360;
+            slotTimerImg.fillOrigin = (int)Image.Origin360.Top;
+            slotTimerImg.fillClockwise = true;
+            slotTimerImg.fillAmount = 0f;
+            slotTimerImg.raycastTarget = false;
+            // SHOW the mask graphic so the timer wedge is visible.
+            slotMaskGo.GetComponent<Mask>().showMaskGraphic = true;
+
+            // Icon child INSIDE the mask. SvgIconLoader so VectorGraphics
+            // SVGImage is used when available (regular Image silently fails
+            // to display VectorGraphics-imported sprites in some cases).
+            var slotIconGo = new GameObject("Icon", typeof(RectTransform));
+            slotIconGo.transform.SetParent(slotMaskGo.transform, false);
             var slotIconRt = (RectTransform)slotIconGo.transform;
             slotIconRt.anchorMin = Vector2.zero; slotIconRt.anchorMax = Vector2.one;
-            slotIconRt.offsetMin = new Vector2(14, 14); slotIconRt.offsetMax = new Vector2(-14, -14);
-            var slotIconImg = slotIconGo.GetComponent<Image>();
-            slotIconImg.preserveAspect = true;
-            slotIconImg.raycastTarget = false;
-            slotIconImg.enabled = false;
+            slotIconRt.offsetMin = new Vector2(4, 4); slotIconRt.offsetMax = new Vector2(-4, -4);
+            var slotIconGraphic = SvgIconLoader.AttachIcon(slotIconGo, null, Color.white);
+            slotIconGraphic.enabled = false;
 
             var chargeLabelGo = new GameObject("Charges", typeof(RectTransform));
             chargeLabelGo.transform.SetParent(slotGo.transform, false);
@@ -886,7 +928,8 @@ namespace Dio.UI.EditorTools
             var hudCtrl = hudRoot.AddComponent<RaceHUD>();
             hudCtrl.minimapRoot = minimapRt;
             hudCtrl.minimapPlayerMarker = markerRt; // unused now; the MarkerRoot is the dynamic-spawn parent
-            hudCtrl.powerupSlotIcon = slotIconImg;
+            hudCtrl.powerupSlotIcon = slotIconGraphic;
+            hudCtrl.powerupTimerImage = slotTimerImg;
             hudCtrl.powerupChargeLabel = chargeLabel;
             hudCtrl.speedLabel = speedText;
             hudCtrl.speedNeedle = needleRt;
@@ -1063,11 +1106,14 @@ namespace Dio.UI.EditorTools
             var bytes = tex.EncodeToPNG();
             System.IO.File.WriteAllBytes(CircleSpritePath, bytes);
             Object.DestroyImmediate(tex);
-            AssetDatabase.ImportAsset(CircleSpritePath);
+            AssetDatabase.ImportAsset(CircleSpritePath, ImportAssetOptions.ForceSynchronousImport);
             var importer = AssetImporter.GetAtPath(CircleSpritePath) as TextureImporter;
             if (importer != null)
             {
                 importer.textureType = TextureImporterType.Sprite;
+                // CRITICAL: Single, not Multiple. Multiple-sprite mode with no
+                // slices makes LoadAssetAtPath<Sprite> return null.
+                importer.spriteImportMode = SpriteImportMode.Single;
                 importer.alphaIsTransparency = true;
                 importer.mipmapEnabled = false;
                 importer.SaveAndReimport();

@@ -55,15 +55,15 @@ namespace Dio.Level.Obstacles
         }
     }
 
-    /// Bob-omb: forward physics projectile with a fuse → AOE explosion. On
-    /// explosion, every car within radius gets tumbled (and the bomb despawns).
+    /// Bo-bomb: dropped behind the car, fuse-armed → AOE explosion. Every car
+    /// within radius gets tumbled + impulse. Stays where it lands (server
+    /// makes it kinematic so the bomb doesn't float off without gravity).
     public class BobombObstacle : Obstacle
     {
-        public float launchSpeed = 22f;
-        public float fuseSeconds = 2.0f;
-        public float explosionRadius = 7f;
-        public float explosionImpulse = 25f;
-        public float tumbleDuration = 1.2f;
+        public float fuseSeconds = 2.5f;
+        public float explosionRadius = 9f;
+        public float explosionImpulse = 28f;
+        public float tumbleDuration = 1.4f;
 
         Rigidbody _rb;
         bool _exploded;
@@ -78,16 +78,26 @@ namespace Dio.Level.Obstacles
         public override void OnStartServer()
         {
             base.OnStartServer();
-            _rb.linearVelocity = transform.forward * launchSpeed;
+            // Drop in place — the BobombEffect spawns this 3 m behind the car
+            // already. Make it kinematic so it stays put regardless of gravity
+            // setup (we don't add SphericalGravity to obstacles).
+            _rb.isKinematic = true;
+            _rb.linearVelocity = Vector3.zero;
             Invoke(nameof(Explode), fuseSeconds);
         }
 
-        void OnCollisionEnter(Collision col)
+        // Trigger overlap also explodes early — fires on any car that runs
+        // INTO the dropped bomb before the fuse. The collider on the prefab
+        // is set to a trigger, so kinematic-vs-kinematic still fires here
+        // (server-side cars are kinematic in the client-authority refactor).
+        void OnTriggerEnter(Collider other)
         {
             if (!isServer || _exploded) return;
-            var car = CarOf(col.collider);
+            var car = CarOf(other);
             if (car != null && IsOwnerImmune(car)) return;
-            Explode();
+            // Any non-immune trigger entry detonates: car hit it, or another
+            // shell, etc. The OverlapSphere in Explode catches everyone.
+            if (car != null) Explode();
         }
 
         [Server]
@@ -100,9 +110,18 @@ namespace Dio.Level.Obstacles
             {
                 var car = CarOf(h);
                 if (car == null) continue;
+                // Owner-immunity: don't blow up the player who dropped it.
+                if (IsOwnerImmune(car)) continue;
                 ApplyState(car, new TumbleState(), tumbleDuration);
+                // Owner is the only peer with a non-kinematic rb (client
+                // authority), so AddForce only meaningfully nudges remote
+                // players' cars on their OWN machine. Server-side rb is
+                // kinematic and ignores AddForce. We instead announce the
+                // explosion via Rpc + each peer applies the impulse to its
+                // own owned car if hit. For now the tumble state alone is
+                // sufficient gameplay-wise; impulse polish can come later.
                 var rb = car.GetComponent<Rigidbody>();
-                if (rb != null)
+                if (rb != null && !rb.isKinematic)
                 {
                     var dir = (car.transform.position - transform.position);
                     if (dir.sqrMagnitude < 0.01f) dir = Random.onUnitSphere;

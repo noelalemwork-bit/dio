@@ -3,6 +3,7 @@ using Mirror;
 using TMPro;
 using UnityEngine;
 using UnityEngine.UI;
+using Dio.Common;
 using Dio.Player;
 using Dio.Powerups;
 
@@ -27,7 +28,10 @@ namespace Dio.UI
         public RectTransform minimapPlayerMarker;
 
         [Header("Powerup slot")]
-        public Image powerupSlotIcon;     // tinted whichever powerup is held
+        [Tooltip("Graphic that displays the held powerup icon (Image or SVGImage). Sprite is swapped via SvgIconLoader.SetSprite so both renderer types work.")]
+        public Graphic powerupSlotIcon;
+        [Tooltip("Image with FillMethod = Radial360 used as a Mask over the slot icon. Its fillAmount drives the circular countdown wipe.")]
+        public Image powerupTimerImage;
         public TMP_Text powerupChargeLabel;
         public PowerupIcon[] iconEntries;
 
@@ -80,8 +84,9 @@ namespace Dio.UI
                 foreach (var e in iconEntries)
                     if (e.icon != null) _iconMap[e.kind] = e.icon;
 
-            // Hide the slot icon until we have something to show.
+            // Hide the slot icon + timer until we have something to show.
             if (powerupSlotIcon != null) powerupSlotIcon.enabled = false;
+            if (powerupTimerImage != null) powerupTimerImage.fillAmount = 0f;
             if (powerupChargeLabel != null) powerupChargeLabel.text = "";
 
             if (pickupBannerGroup != null) pickupBannerGroup.alpha = 0f;
@@ -271,14 +276,14 @@ namespace Dio.UI
                 if (held == PowerupKind.None)
                 {
                     powerupSlotIcon.enabled = false;
-                    powerupSlotIcon.sprite = null;
+                    SvgIconLoader.SetSprite(powerupSlotIcon, null);
                 }
                 else
                 {
-                    if (_iconMap.TryGetValue(held, out var sprite))
+                    if (_iconMap.TryGetValue(held, out var sprite) && sprite != null)
                     {
-                        powerupSlotIcon.sprite = sprite;
-                        powerupSlotIcon.enabled = sprite != null;
+                        SvgIconLoader.SetSprite(powerupSlotIcon, sprite);
+                        powerupSlotIcon.enabled = true;
                     }
                     else
                     {
@@ -292,6 +297,24 @@ namespace Dio.UI
                 _lastCharges = charges;
                 if (powerupChargeLabel != null)
                     powerupChargeLabel.text = charges > 1 ? "x" + charges : "";
+            }
+
+            // Circular timer mask. fillAmount = remaining/total — wipes from
+            // 1 (full circle, icon fully visible) to 0 (nothing left, icon
+            // fully hidden) over the kind-specific hold duration.
+            if (powerupTimerImage != null)
+            {
+                if (held == PowerupKind.None || _localHolder.heldUntilServerTime <= 0)
+                {
+                    powerupTimerImage.fillAmount = 0f;
+                }
+                else
+                {
+                    float total = PowerupHolder.DefaultHoldSeconds(held);
+                    double remaining = _localHolder.heldUntilServerTime - NetworkTime.time;
+                    float t = total > 0 ? Mathf.Clamp01((float)(remaining / total)) : 0f;
+                    powerupTimerImage.fillAmount = t;
+                }
             }
         }
     }

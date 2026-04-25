@@ -3,6 +3,35 @@ using Dio.Player;
 
 namespace Dio.Powerups.States
 {
+    /// Builds a "client copy" CarState from a synced PowerupKind so the owner
+    /// can apply ModifyInputs / ModifyController locally. The server is still
+    /// authoritative on durations / expiry; the owner just mirrors the active
+    /// kinds and applies the SAME modification each FixedUpdate.
+    public static class CarStateFactory
+    {
+        public static CarState Create(PowerupKind kind)
+        {
+            switch (kind)
+            {
+                case PowerupKind.Boost:       return new SpeedBoostState();
+                case PowerupKind.TripleBoost: return new SpeedBoostState();
+                case PowerupKind.Star:        return new StarState();
+                case PowerupKind.Lightning:   return new ShrunkState();
+                // Static-hazard slip + tumble share the same kind enum hack
+                // (SlipperyState.Kind == OilSlick, TumbleState.Kind ==
+                // GreenShell). Map the kind back to a sensible default.
+                case PowerupKind.Banana:      return new SlipperyState { Mode = SlipperyState.SlipMode.RandomSteer };
+                case PowerupKind.OilSlick:    return new SlipperyState { Mode = SlipperyState.SlipMode.ZeroSteer };
+                case PowerupKind.GreenShell:
+                case PowerupKind.BlueShell:
+                case PowerupKind.Bobomb:
+                case PowerupKind.Tornado:     return new TumbleState();
+                case PowerupKind.FreezeRay:   return new FrozenState();
+                default: return null;
+            }
+        }
+    }
+
     /// Linear forward speed boost. Bumps max speed and peak torque for a short duration.
     public class SpeedBoostState : CarState
     {

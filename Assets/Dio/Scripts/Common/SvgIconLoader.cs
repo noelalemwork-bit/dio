@@ -36,15 +36,17 @@ namespace Dio.Common
         public static bool VectorGraphicsAvailable => SvgImageType != null;
 
         /// Attach an Image-or-SVGImage to the GameObject and assign the sprite.
-        /// Returns the Graphic component for further tweaking.
+        /// Returns the Graphic component for further tweaking. When sprite is
+        /// null, still attaches the SVGImage (or Image) so callers can swap
+        /// the sprite later via SetSprite.
         public static Graphic AttachIcon(GameObject go, Sprite sprite, Color tint, bool preserveAspect = true)
         {
-            if (SvgImageType != null && sprite != null)
+            if (SvgImageType != null)
             {
                 var comp = go.AddComponent(SvgImageType) as Graphic;
                 if (comp != null)
                 {
-                    _svgImageSpriteProp?.SetValue(comp, sprite);
+                    if (sprite != null) _svgImageSpriteProp?.SetValue(comp, sprite);
                     comp.color = tint;
                     comp.raycastTarget = false;
                     return comp;
@@ -52,10 +54,27 @@ namespace Dio.Common
             }
             var img = go.AddComponent<Image>();
             img.sprite = sprite;
-            img.color = sprite != null ? tint : tint;
+            img.color = tint;
             img.preserveAspect = preserveAspect;
             img.raycastTarget = false;
             return img;
+        }
+
+        /// Swap the sprite on a Graphic that may be either Image or SVGImage.
+        /// Mirrors the AttachIcon "either / or" path so RaceHUD code doesn't
+        /// have to know which is in play.
+        public static void SetSprite(Graphic g, Sprite sprite)
+        {
+            if (g == null) return;
+            if (g is Image img) { img.sprite = sprite; return; }
+            // SVGImage path via reflection.
+            if (SvgImageType != null && _svgImageSpriteProp != null && SvgImageType.IsInstanceOfType(g))
+                _svgImageSpriteProp.SetValue(g, sprite);
+        }
+
+        public static void SetEnabled(Graphic g, bool on)
+        {
+            if (g != null) g.enabled = on;
         }
     }
 }
