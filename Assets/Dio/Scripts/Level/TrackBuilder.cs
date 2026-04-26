@@ -3,90 +3,232 @@ using UnityEngine;
 
 namespace Dio.Level
 {
-    /// Builds a strip Mesh along the spherical-Bezier chain of a LevelData.
-    /// The strip:
-    ///   * follows spherical cubic Beziers (slerp-based De Casteljau), not
-    ///     straight lines — every sample stays exactly on the planet
-    ///   * is lifted slightly above the surface by `surfaceLift` so it doesn't
-    ///     z-fight the planet sphere
-    ///   * is `level.trackWidth` wide, oriented by the local Frenet frame:
-    ///     surface-normal × tangent gives the cross-section direction. C1
-    ///     continuity at shared anchors (enforced by the editor) keeps the
-    ///     tangent — and therefore the lateral frame — continuous, so two
-    ///     adjacent segments share a seamless joint.
-    ///   * has UVs u = arc-length-along-track / track-width (so a square
-    ///     texture tile repeats every track-width units), v = 0..1 across.
+    /// Procedural mesh generation for the racing track and its guard rails.
+    ///
+    /// Pipeline:
+    ///   1. Walk the LevelData adjacency graph (`points[i].next`) to enumerate
+    ///      directed edges. Linear chains, branches, and joins are all handled
+    ///      uniformly — branches just emit multiple edges from one anchor.
+    ///   2. For each edge, sample its spherical-cubic-Bezier (`SegmentsPerArc`
+    ///      samples). At every sample, raycast against the Globe to get the
+    ///      true surface radius along that direction; lerp the two anchors'
+    ///      yOffsets and add to it. This makes the ribbon hug the actual
+    ///      terrain, not an idealised sphere.
+    ///   3. Build the lateral L/R verts using the local Frenet frame
+    ///      (tangent × surface-normal). Cache anchor-boundary verts in a
+    ///      dictionary so two edges meeting at the same anchor share verts —
+    ///      eliminates the seam between adjacent edges and (once branches
+    ///      arrive) keeps fork joints crack-free.
+    ///   4. Effective track width = `level.trackWidth * level.trackRatio`,
+    ///      so a per-level "narrow / wide" multiplier flows automatically
+    ///      through the ribbon, the guards, and the spawn pad.
+    ///
+    /// Guard rails are a separate pass that follows the same edge enumeration.
+    /// The cross-section is configurable:
+    ///   * `Full`          — skirt + wall + lip (the default for runtime).
+    ///   * `OuterSkirtOnly`— just the skirt, drawn from each sample down to
+    ///                      the surface (regardless of yOffset). Lets the
+    ///                      level editor visualise track elevation without
+    ///                      walls obscuring the view.
+    ///   * `floorAtSurface`— independent flag that anchors the skirt bottom
+    ///                      at (surface − floorPad), so an elevated track's
+    ///                      skirt always reaches the actual ground.
+    ///
+    /// Endcaps are optional rails closing off the ends of an open chain
+    /// (start gate / finish line). They share the same Z cross-section as
+    /// the side guards.
+    ///
+    /// Spawn pad: a short geodesic ribbon extending backward from the start
+    /// anchor along its tangent. Y is held uniform at the start anchor's
+    /// resolved height — so cars on the back row stand at the same height
+    /// as the polesitter and the front of the live track is invisibly seamed
+    /// to the back of the pad.
     public static class TrackBuilder
     {
         const int SegmentsPerArc = 64;
         const float DerivEpsilon = 0.001f;
 
-        public static Mesh Build(LevelData level, float surfaceLift = 0.08f)
+        // Robust finite-difference bezier tangent. At t == 1 we'd otherwise
+        // sample bezier(1+epsilon) which clamps back to bezier(1) and gives a
+        // zero tangent — which used to fall through to the great-circle
+        // tangent (= straight line A→B), wrong for any curved bezier. Now we
+        // step BACKWARD at t==1 so the local tangent always reflects the
+        // true bezier derivative.
+        static Vector3 BezierTangent(Vector3 a, Vector3 ah, Vector3 bh, Vector3 b, float t)
+        {
+            Vector3 dir, dirAhead;
+            if (t < 1f - DerivEpsilon)
+            {
+                dir      = GeodesicUtil.SphericalBezier(a, ah, bh, b, t);
+                dirAhead = GeodesicUtil.SphericalBezier(a, ah, bh, b, t + DerivEpsilon);
+                Vector3 tan = (dirAhead - dir).normalized;
+                if (tan.sqrMagnitude > 1e-6f) return tan;
+            }
+            else
+            {
+                // Backward finite difference at the right endpoint.
+                dir      = GeodesicUtil.SphericalBezier(a, ah, bh, b, 1f - DerivEpsilon);
+                dirAhead = GeodesicUtil.SphericalBezier(a, ah, bh, b, 1f);
+                Vector3 tan = (dirAhead - dir).normalized;
+                if (tan.sqrMagnitude > 1e-6f) return tan;
+            }
+            return GeodesicUtil.TangentAt(a, b);
+        }
+        // Default surface lift in world units. Larger = the ribbon visibly
+        // hovers above the terrain (no z-fighting under any LOD), smaller =
+        // hugs more tightly. ~8 cm is the empirical sweet spot.
+        public const float DefaultSurfaceLift = 0.08f;
+        // Default floor pad: how far past the surface the guard skirt
+        // extends. Big enough to bridge any seam between the ribbon and the
+        // Globe collider in shallow valleys.
+        public const float DefaultFloorPad = 1.0f;
+
+        public enum GuardCrossSection
+        {
+            /// Skirt → wall → lip. Used at runtime for actual collision walls.
+            Full,
+            /// Just the outward skirt — for editor previews where seeing the
+            /// track elevation matters more than seeing collision boundaries.
+            OuterSkirtOnly,
+        }
+
+        public struct GuardOptions
+        {
+            public GuardCrossSection crossSection;
+            public float wallHeight;
+            public float lipOutward;
+            public float skirtDepth;          // used only when floorAtSurface = false
+            public float floorPad;            // used when floorAtSurface = true
+            public float outwardOffset;
+            /// When true, skirt bottom is anchored at (surface − floorPad)
+            /// regardless of the sample's yOffset. So an elevated track's
+            /// guard skirt visibly extends all the way down to the ground —
+            /// the user-visible "height of the road above the planet" reads
+            /// naturally on screen.
+            public bool floorAtSurface;
+            /// When true, build a lateral wall at each open endpoint of the
+            /// chain (start anchor with no incoming edges, finish anchor with
+            /// no outgoing). Used for start gates / finish lines.
+            public bool addEndcaps;
+
+            public static GuardOptions Default => new GuardOptions
+            {
+                crossSection   = GuardCrossSection.Full,
+                wallHeight     = 2.2f,
+                lipOutward     = 0.4f,
+                skirtDepth     = 1f,
+                floorPad       = DefaultFloorPad,
+                outwardOffset  = 0.05f,
+                floorAtSurface = true,
+                addEndcaps     = false,
+            };
+        }
+
+        /// Build the full track ribbon. Pass a `raycaster` to make every
+        /// sample hug the Globe surface; pass null to fall back to the
+        /// level's nominal sphere (fine for off-screen render targets that
+        /// don't need surface accuracy).
+        public static Mesh Build(LevelData level, GlobeRaycaster raycaster = null, float surfaceLift = DefaultSurfaceLift)
         {
             if (level == null || !level.HasMinimum) return null;
+            level.EnsureLinearChainNext();
 
-            float r = level.planetRadius;
-            float halfW = level.trackWidth * 0.5f;
+            float halfW = level.EffectiveTrackWidth * 0.5f;
 
-            var verts   = new List<Vector3>(SegmentsPerArc * level.points.Count * 2);
-            var normals = new List<Vector3>(verts.Capacity);
-            var uvs     = new List<Vector2>(verts.Capacity);
-            var tris    = new List<int>(verts.Capacity * 3);
+            var verts   = new List<Vector3>();
+            var normals = new List<Vector3>();
+            var uvs     = new List<Vector2>();
+            var tris    = new List<int>();
+
+            // L/R vertex indices cached per anchor so adjacent edges sharing
+            // a node reuse exact same boundary verts. The lateral frame at
+            // any anchor is uniquely determined by its shared in/outHandle,
+            // so reuse is always seam-free. Cached anchor radial heights
+            // also prevent floating-point drift between two edges meeting
+            // at the same node.
+            var anchorVerts = new Dictionary<int, (int left, int right)>();
+            var anchorRadial = new Dictionary<int, float>();
 
             float arcCursor = 0f;
 
-            // Generate samples per segment: bezier(t) for t in [0..1).
-            // Last sample of each segment == first sample of next, so we
-            // drop duplicates between segments (except on the final segment
-            // where we include t = 1).
-            for (int seg = 0; seg < level.points.Count - 1; seg++)
+            foreach (var (i, j) in level.EnumerateEdges())
             {
-                level.GetSegment(seg, out Vector3 a, out Vector3 ah, out Vector3 bh, out Vector3 b);
+                level.GetEdge(i, j, out Vector3 a, out Vector3 ah, out Vector3 bh, out Vector3 b);
 
-                bool isLastSeg = seg == level.points.Count - 2;
-                int sampleCount = isLastSeg ? SegmentsPerArc + 1 : SegmentsPerArc;
+                // Compute each endpoint's RADIAL HEIGHT exactly once. Per-
+                // sample raycast made the polyline jitter on uneven terrain
+                // and produced a visible dip at the endpoint just before t=1
+                // (a single raycast missed → fallback to NominalRadius for
+                // that one sample). Lerping between two anchor heights
+                // matches "normal bezier" behaviour and is smooth by
+                // construction.
+                if (!anchorRadial.TryGetValue(i, out float startRadial))
+                {
+                    float surfA = raycaster != null ? raycaster.ResolveSurfaceRadius(a) : level.NominalRadius;
+                    startRadial = surfA + level.points[i].yOffset;
+                    anchorRadial[i] = startRadial;
+                }
+                if (!anchorRadial.TryGetValue(j, out float endRadial))
+                {
+                    float surfB = raycaster != null ? raycaster.ResolveSurfaceRadius(b) : level.NominalRadius;
+                    endRadial = surfB + level.points[j].yOffset;
+                    anchorRadial[j] = endRadial;
+                }
 
-                Vector3 prevDir = GeodesicUtil.SphericalBezier(a, ah, bh, b, 0f);
-                for (int s = 0; s < sampleCount; s++)
+                int prevLeft  = -1;
+                int prevRight = -1;
+                Vector3 prevWorldCenter = Vector3.zero;
+
+                for (int s = 0; s <= SegmentsPerArc; s++)
                 {
                     float t = (float)s / SegmentsPerArc;
-                    Vector3 dir = GeodesicUtil.SphericalBezier(a, ah, bh, b, t);
+                    bool atStart = s == 0;
+                    bool atEnd   = s == SegmentsPerArc;
+                    int anchorAt = atStart ? i : (atEnd ? j : -1);
 
-                    // Tangent: finite difference on the bezier.
-                    Vector3 dirAhead = GeodesicUtil.SphericalBezier(a, ah, bh, b, Mathf.Min(1f, t + DerivEpsilon));
-                    Vector3 tangent = (dirAhead - dir).normalized;
-                    if (tangent.sqrMagnitude < 1e-6f) tangent = (dir - prevDir).normalized;
-                    if (tangent.sqrMagnitude < 1e-6f) tangent = GeodesicUtil.TangentAt(a, b);
+                    int left, right;
+                    Vector3 worldCenter;
 
-                    // Local Frenet basis on the sphere.
-                    Vector3 normal = dir;                                 // surface up
-                    Vector3 width  = Vector3.Cross(tangent, normal).normalized;
-
-                    Vector3 center = dir * (r + surfaceLift);
-                    Vector3 vL = center + width * halfW;
-                    Vector3 vR = center - width * halfW;
-
-                    verts.Add(vL); verts.Add(vR);
-                    normals.Add(normal); normals.Add(normal);
-
-                    float uvU = arcCursor / Mathf.Max(0.01f, level.trackWidth);
-                    uvs.Add(new Vector2(uvU, 0f));
-                    uvs.Add(new Vector2(uvU, 1f));
-
-                    if (verts.Count >= 4)
+                    if (anchorAt >= 0 && anchorVerts.TryGetValue(anchorAt, out var cached))
                     {
-                        int v = verts.Count - 4; // L0, R0, L1, R1
-                        // Wind so triangle normals point along surface up.
-                        tris.Add(v + 0); tris.Add(v + 2); tris.Add(v + 1);
-                        tris.Add(v + 1); tris.Add(v + 2); tris.Add(v + 3);
+                        left = cached.left;
+                        right = cached.right;
+                        worldCenter = (verts[left] + verts[right]) * 0.5f;
+                    }
+                    else
+                    {
+                        Vector3 dir = GeodesicUtil.SphericalBezier(a, ah, bh, b, t);
+                        Vector3 tangent = BezierTangent(a, ah, bh, b, t);
+                        Vector3 normal = dir;
+                        Vector3 width  = Vector3.Cross(tangent, normal).normalized;
+
+                        float radial = Mathf.Lerp(startRadial, endRadial, t) + surfaceLift;
+                        worldCenter = dir * radial;
+                        Vector3 vL  = worldCenter + width * halfW;
+                        Vector3 vR  = worldCenter - width * halfW;
+
+                        left  = verts.Count;     verts.Add(vL); normals.Add(normal); uvs.Add(default);
+                        right = verts.Count;     verts.Add(vR); normals.Add(normal); uvs.Add(default);
+
+                        if (anchorAt >= 0) anchorVerts[anchorAt] = (left, right);
                     }
 
-                    if (s + 1 < sampleCount)
+                    if (s > 0)
+                        arcCursor += Vector3.Distance(prevWorldCenter, worldCenter);
+
+                    float uvU = arcCursor / Mathf.Max(0.01f, level.EffectiveTrackWidth);
+                    uvs[left]  = new Vector2(uvU, 0f);
+                    uvs[right] = new Vector2(uvU, 1f);
+
+                    if (s > 0)
                     {
-                        Vector3 nextDir = GeodesicUtil.SphericalBezier(a, ah, bh, b, (float)(s + 1) / SegmentsPerArc);
-                        arcCursor += Vector3.Angle(dir, nextDir) * Mathf.Deg2Rad * r;
+                        tris.Add(prevLeft);  tris.Add(left);  tris.Add(prevRight);
+                        tris.Add(prevRight); tris.Add(left);  tris.Add(right);
                     }
-                    prevDir = dir;
+
+                    prevLeft = left;
+                    prevRight = right;
+                    prevWorldCenter = worldCenter;
                 }
             }
 
@@ -105,59 +247,56 @@ namespace Dio.Level
             return mesh;
         }
 
-        /// Build a pair of guard-rail meshes along each side of the track.
-        /// Cross-section is a Z-shape (3 segments along the local lateral
-        /// frame at each sample) instead of a flat plane:
+        /// Build a pair of guard-rail meshes along each side of every edge
+        /// in the graph. Endcaps (`addEndcaps = true`) close off open
+        /// endpoints with a perpendicular wall.
         ///
-        ///                                      .-- top  (lip:  outward 0.05m)
-        ///                                      |
-        ///   wall-up 0.2m  --------------------'
-        ///                                      |
-        ///                                  bottom (1m below the surface
-        ///                                  → closes any seam between the
-        ///                                  ribbon and the low-poly planet
-        ///                                  collider, prevents pop-throughs)
-        ///
-        /// The little outward kink on top stops a car bouncing off the wall
-        /// from popping over the lip. Inward-facing winding so cars on the
-        /// track see a wall and the back side is invisible.
-        public static (Mesh left, Mesh right) BuildGuards(LevelData level,
-            float wallHeight = 0.2f, float lipOutward = 0.05f, float skirtDepth = 1f,
-            float outwardOffset = 0.05f)
+        /// At a multi-edge anchor (fork or join) the inner-side guards of
+        /// adjacent edges currently overlap until the edges separate by more
+        /// than a track width — Pass 2 of the refactor adds a binary search
+        /// to find the divergence-t and skip emission up to that point.
+        /// For linear chains this is a no-op.
+        public static (Mesh left, Mesh right) BuildGuards(LevelData level, GlobeRaycaster raycaster = null, GuardOptions? options = null)
         {
             if (level == null || !level.HasMinimum) return (null, null);
-            float r = level.planetRadius;
-            float halfW = level.trackWidth * 0.5f;
+            level.EnsureLinearChainNext();
+            var opt = options ?? GuardOptions.Default;
 
             var leftVerts  = new List<Vector3>();
             var leftTris   = new List<int>();
             var rightVerts = new List<Vector3>();
             var rightTris  = new List<int>();
 
-            for (int seg = 0; seg < level.points.Count - 1; seg++)
+            // Skip ranges per (from, to) edge: how many initial / trailing
+            // samples to drop on the LEFT or RIGHT guard. Populated below for
+            // edges meeting at a fork or join. For linear chains every entry
+            // is zero and the whole strip is emitted as before.
+            var skipStartL = new Dictionary<(int, int), int>();
+            var skipStartR = new Dictionary<(int, int), int>();
+            var skipEndL   = new Dictionary<(int, int), int>();
+            var skipEndR   = new Dictionary<(int, int), int>();
+            ComputeForkJoinSkips(level, raycaster, skipStartL, skipStartR, skipEndL, skipEndR);
+
+            foreach (var (i, j) in level.EnumerateEdges())
             {
-                level.GetSegment(seg, out Vector3 a, out Vector3 ah, out Vector3 bh, out Vector3 b);
-                bool isLastSeg = seg == level.points.Count - 2;
-                int sampleCount = isLastSeg ? SegmentsPerArc + 1 : SegmentsPerArc;
+                int leftStart  = skipStartL.TryGetValue((i, j), out int v1) ? v1 : 0;
+                int rightStart = skipStartR.TryGetValue((i, j), out int v2) ? v2 : 0;
+                int leftEnd    = skipEndL  .TryGetValue((i, j), out int v3) ? v3 : 0;
+                int rightEnd   = skipEndR  .TryGetValue((i, j), out int v4) ? v4 : 0;
 
-                for (int s = 0; s < sampleCount; s++)
-                {
-                    float t = (float)s / SegmentsPerArc;
-                    Vector3 dir = GeodesicUtil.SphericalBezier(a, ah, bh, b, t);
-                    Vector3 dirAhead = GeodesicUtil.SphericalBezier(a, ah, bh, b, Mathf.Min(1f, t + DerivEpsilon));
-                    Vector3 tangent = (dirAhead - dir).normalized;
-                    if (tangent.sqrMagnitude < 1e-6f) tangent = GeodesicUtil.TangentAt(a, b);
+                EmitGuardStrip(level, raycaster, opt, i, j, signOfWidth: +1f,
+                    leftStart, SegmentsPerArc - leftEnd, leftVerts, leftTris);
+                EmitGuardStrip(level, raycaster, opt, i, j, signOfWidth: -1f,
+                    rightStart, SegmentsPerArc - rightEnd, rightVerts, rightTris);
+            }
 
-                    Vector3 normal = dir;
-                    Vector3 width = Vector3.Cross(tangent, normal).normalized; // +width = "left"
-
-                    // Anchor row on the surface, just outside the ribbon edge.
-                    Vector3 leftAnchor  = dir * r + width * (halfW + outwardOffset);
-                    Vector3 rightAnchor = dir * r - width * (halfW + outwardOffset);
-
-                    AppendZSection(leftVerts, leftTris, leftAnchor, dir, width, wallHeight, lipOutward, skirtDepth, s, inwardSign: -1);
-                    AppendZSection(rightVerts, rightTris, rightAnchor, dir, -1f * width, wallHeight, lipOutward, skirtDepth, s, inwardSign: +1);
-                }
+            // Endcap walls at chain endpoints — start anchor has no incoming
+            // edges, finish anchor has no outgoing. Run after the side
+            // guards so the endcap shares the surface raycast already done.
+            if (opt.addEndcaps)
+            {
+                AppendEndcap(level, raycaster, opt, leftVerts, leftTris, rightVerts, rightTris, atFinish: false);
+                AppendEndcap(level, raycaster, opt, leftVerts, leftTris, rightVerts, rightTris, atFinish: true);
             }
 
             Mesh BuildMesh(string n, List<Vector3> verts, List<int> tris)
@@ -176,47 +315,278 @@ namespace Dio.Level
                 return m;
             }
 
-            return (BuildMesh("DioGuardLeft", leftVerts, leftTris),
+            return (BuildMesh("DioGuardLeft",  leftVerts,  leftTris),
                     BuildMesh("DioGuardRight", rightVerts, rightTris));
         }
 
-        // Add four cross-section vertices (bottom → wall-base → wall-top → lip-end)
-        // for one sample of one guardrail. Once two consecutive samples exist
-        // we can stitch a quad strip (3 quads × 2 tris) between them.
-        //
-        // `outward` is the unit vector pointing AWAY from the track at this
-        // sample (it's `+width` for the left guard, `-width` for the right).
-        // `inwardSign` flips winding so both guardrails face inward.
-        static void AppendZSection(List<Vector3> verts, List<int> tris,
-            Vector3 anchor, Vector3 surfaceUp, Vector3 outward,
-            float wallHeight, float lipOutward, float skirtDepth, int sampleIndex, int inwardSign)
+        // Emit one continuous strip of guard cross-sections for one side of
+        // one edge between sample indices `sStart` and `sEnd` (inclusive).
+        // Radial height lerps between the two endpoint heights — same logic
+        // as Build() so the rail's top edge tracks the ribbon exactly.
+        // The skirt bottom is independent and uses each sample's actual
+        // surface raycast (so the rail still hugs uneven terrain DOWNWARD
+        // even when the ribbon's top is flat).
+        static void EmitGuardStrip(LevelData level, GlobeRaycaster raycaster, in GuardOptions opt,
+            int from, int to, float signOfWidth, int sStart, int sEnd,
+            List<Vector3> verts, List<int> tris)
         {
-            // 4 verts per ring: bottom (under surface), surface, wall-top, lip-end.
-            Vector3 vBot     = anchor - surfaceUp * skirtDepth;     // 1m below surface
-            Vector3 vSurf    = anchor;                              // on the surface
-            Vector3 vWallTop = anchor + surfaceUp * wallHeight;     // 0.2m up
-            Vector3 vLip     = vWallTop + outward * lipOutward;     // 0.05m outward
+            if (sStart > sEnd) return;
+            level.GetEdge(from, to, out Vector3 a, out Vector3 ah, out Vector3 bh, out Vector3 b);
+            float halfW = level.EffectiveTrackWidth * 0.5f;
 
-            int baseIdx = verts.Count;
-            verts.Add(vBot); verts.Add(vSurf); verts.Add(vWallTop); verts.Add(vLip);
+            float startSurfaceR = raycaster != null ? raycaster.ResolveSurfaceRadius(a) : level.NominalRadius;
+            float endSurfaceR   = raycaster != null ? raycaster.ResolveSurfaceRadius(b) : level.NominalRadius;
+            float startTop = startSurfaceR + level.points[from].yOffset;
+            float endTop   = endSurfaceR   + level.points[to].yOffset;
 
-            if (sampleIndex == 0) return;
+            int local = 0;
+            for (int s = sStart; s <= sEnd; s++)
+            {
+                float t = (float)s / SegmentsPerArc;
+                Vector3 dir = GeodesicUtil.SphericalBezier(a, ah, bh, b, t);
+                Vector3 tangent = BezierTangent(a, ah, bh, b, t);
+                Vector3 width = Vector3.Cross(tangent, dir).normalized;
+                Vector3 sideOutward = signOfWidth > 0 ? width : -width;
 
-            // Ring i-1 = baseIdx - 4..baseIdx - 1. Ring i = baseIdx..baseIdx + 3.
-            int p = baseIdx - 4;
-            int c = baseIdx;
-            // Three quads: skirt (bot→surf), wall (surf→wallTop), lip (wallTop→lip).
-            EmitQuad(tris, p + 0, p + 1, c + 0, c + 1, inwardSign);
-            EmitQuad(tris, p + 1, p + 2, c + 1, c + 2, inwardSign);
-            EmitQuad(tris, p + 2, p + 3, c + 2, c + 3, inwardSign);
+                float topRadial = Mathf.Lerp(startTop, endTop, t);
+                // Per-sample surface raycast for the SKIRT bottom only, so
+                // the floor still hugs the actual ground beneath an elevated
+                // ribbon. Falls back to NominalRadius on miss.
+                float surfaceR = raycaster != null ? raycaster.ResolveSurfaceRadius(dir) : level.NominalRadius;
+
+                Vector3 anchor = dir * topRadial + sideOutward * (halfW + opt.outwardOffset);
+                int inwardSign = signOfWidth > 0 ? -1 : +1;
+                AppendCross(verts, tris, anchor, dir, surfaceR, sideOutward, opt, local, inwardSign);
+                local++;
+            }
         }
 
-        // Emit one quad as two triangles. Winding flipped by `sign` so the
-        // visible face points inward (toward the track center). Quad layout:
-        //
-        //   p0 -- p1
-        //   |     |
-        //   c0 -- c1
+        // Find for each fork (multi-out anchor) and join (multi-in anchor) how
+        // many initial / trailing samples on the inner-side guards must be
+        // dropped to avoid two adjacent edges' rails overlapping. Algorithm:
+        //   1. Sort outgoing edges by their initial tangent's angle around
+        //      the anchor's surface normal (left-to-right ordering).
+        //   2. For each adjacent pair (eA leftward of eB), step samples
+        //      forward until eA's right-edge-of-track and eB's left-edge-of-
+        //      track are separated by at least `EffectiveTrackWidth`. That
+        //      sample index becomes the skip count for both rails.
+        //   3. Mirror the logic at multi-in anchors using the FINAL tangent
+        //      of each incoming edge (so the rails on the join end converge
+        //      cleanly).
+        // The leftmost outgoing's left rail and the rightmost outgoing's right
+        // rail are never affected — they remain the outer envelope of the fork.
+        static void ComputeForkJoinSkips(LevelData level, GlobeRaycaster raycaster,
+            Dictionary<(int, int), int> skipStartL, Dictionary<(int, int), int> skipStartR,
+            Dictionary<(int, int), int> skipEndL,   Dictionary<(int, int), int> skipEndR)
+        {
+            float threshold = level.EffectiveTrackWidth;
+
+            // Outgoing groups.
+            for (int i = 0; i < level.points.Count; i++)
+            {
+                var nx = level.points[i].next;
+                if (nx == null || nx.Count < 2) continue;
+                var sorted = SortBranchesByTangent(level, i, nx, atStart: true);
+                for (int k = 0; k + 1 < sorted.Count; k++)
+                {
+                    int jL = sorted[k];     // leftward branch
+                    int jR = sorted[k + 1]; // rightward
+                    int sk = FindFanOutSampleIndex(level, raycaster, i, jL, jR, atStart: true, threshold);
+                    skipStartR[(i, jL)] = sk;
+                    skipStartL[(i, jR)] = sk;
+                }
+            }
+
+            // Incoming groups: invert via inverse adjacency.
+            var incoming = new Dictionary<int, List<int>>();
+            for (int i = 0; i < level.points.Count; i++)
+            {
+                var nx = level.points[i].next;
+                if (nx == null) continue;
+                for (int k = 0; k < nx.Count; k++)
+                {
+                    int j = nx[k];
+                    if (!incoming.TryGetValue(j, out var list)) { list = new List<int>(); incoming[j] = list; }
+                    list.Add(i);
+                }
+            }
+            foreach (var kv in incoming)
+            {
+                int j = kv.Key;
+                var ins = kv.Value;
+                if (ins.Count < 2) continue;
+                var sorted = SortBranchesByTangent(level, j, ins, atStart: false);
+                for (int k = 0; k + 1 < sorted.Count; k++)
+                {
+                    int iL = sorted[k];
+                    int iR = sorted[k + 1];
+                    int sk = FindFanOutSampleIndex(level, raycaster, j, iL, iR, atStart: false, threshold);
+                    skipEndR[(iL, j)] = sk;
+                    skipEndL[(iR, j)] = sk;
+                }
+            }
+        }
+
+        // Sort `neighbours` (indices that share an edge with `anchor`) by the
+        // signed angle of each edge's initial / final tangent around the
+        // anchor's surface normal. Returns indices left-to-right.
+        static List<int> SortBranchesByTangent(LevelData level, int anchor, List<int> neighbours, bool atStart)
+        {
+            Vector3 normal = level.DirOf(anchor);
+            // Reference axis: project the first neighbour's tangent onto the
+            // tangent plane and use that as 0°.
+            Vector3 refTan = Vector3.zero;
+            var tangents = new List<(int idx, Vector3 tan)>(neighbours.Count);
+            for (int k = 0; k < neighbours.Count; k++)
+            {
+                int other = neighbours[k];
+                int from = atStart ? anchor : other;
+                int to   = atStart ? other  : anchor;
+                level.GetEdge(from, to, out Vector3 a, out Vector3 ah, out Vector3 bh, out Vector3 b);
+                float t = atStart ? DerivEpsilon : 1f - DerivEpsilon;
+                float t0 = atStart ? 0f : 1f;
+                Vector3 dirA = GeodesicUtil.SphericalBezier(a, ah, bh, b, t0);
+                Vector3 dirB = GeodesicUtil.SphericalBezier(a, ah, bh, b, t);
+                Vector3 tan = (dirB - dirA).normalized;
+                // Project to tangent plane.
+                tan -= Vector3.Dot(tan, normal) * normal;
+                if (tan.sqrMagnitude > 1e-8f) tan.Normalize();
+                else tan = Vector3.Cross(normal, Vector3.up).normalized;
+                if (k == 0) refTan = tan;
+                tangents.Add((other, tan));
+            }
+            var withAngle = new List<(int idx, float angle)>(tangents.Count);
+            for (int k = 0; k < tangents.Count; k++)
+            {
+                float ang = Vector3.SignedAngle(refTan, tangents[k].tan, normal);
+                withAngle.Add((tangents[k].idx, ang));
+            }
+            withAngle.Sort((x, y) => x.angle.CompareTo(y.angle));
+            var result = new List<int>(withAngle.Count);
+            for (int k = 0; k < withAngle.Count; k++) result.Add(withAngle[k].idx);
+            return result;
+        }
+
+        // Step sample-by-sample forward (or backward, for joins) along two
+        // adjacent edges and find the first sample where their inner rails
+        // (eA's right vs eB's left) are at least `threshold` apart.
+        static int FindFanOutSampleIndex(LevelData level, GlobeRaycaster raycaster,
+            int anchor, int otherL, int otherR, bool atStart, float threshold)
+        {
+            int fromL = atStart ? anchor : otherL;
+            int toL   = atStart ? otherL : anchor;
+            int fromR = atStart ? anchor : otherR;
+            int toR   = atStart ? otherR : anchor;
+            level.GetEdge(fromL, toL, out Vector3 aL, out Vector3 ahL, out Vector3 bhL, out Vector3 bL);
+            level.GetEdge(fromR, toR, out Vector3 aR, out Vector3 ahR, out Vector3 bhR, out Vector3 bR);
+            float halfW = level.EffectiveTrackWidth * 0.5f;
+            for (int s = 0; s <= SegmentsPerArc; s++)
+            {
+                float t = atStart ? (float)s / SegmentsPerArc : 1f - (float)s / SegmentsPerArc;
+                Vector3 dirL = GeodesicUtil.SphericalBezier(aL, ahL, bhL, bL, t);
+                Vector3 dirAheadL = GeodesicUtil.SphericalBezier(aL, ahL, bhL, bL, Mathf.Clamp01(t + DerivEpsilon));
+                Vector3 tanL = (dirAheadL - dirL).normalized;
+                if (tanL.sqrMagnitude < 1e-6f) tanL = GeodesicUtil.TangentAt(aL, bL);
+                Vector3 wL = Vector3.Cross(tanL, dirL).normalized;
+                float surfL = raycaster != null ? raycaster.ResolveSurfaceRadius(dirL) : level.NominalRadius;
+                Vector3 ptLR = dirL * surfL - wL * halfW;
+
+                Vector3 dirR = GeodesicUtil.SphericalBezier(aR, ahR, bhR, bR, t);
+                Vector3 dirAheadR = GeodesicUtil.SphericalBezier(aR, ahR, bhR, bR, Mathf.Clamp01(t + DerivEpsilon));
+                Vector3 tanR = (dirAheadR - dirR).normalized;
+                if (tanR.sqrMagnitude < 1e-6f) tanR = GeodesicUtil.TangentAt(aR, bR);
+                Vector3 wR = Vector3.Cross(tanR, dirR).normalized;
+                float surfR = raycaster != null ? raycaster.ResolveSurfaceRadius(dirR) : level.NominalRadius;
+                Vector3 ptRL = dirR * surfR + wR * halfW;
+
+                if (Vector3.Distance(ptLR, ptRL) >= threshold)
+                    return s;
+            }
+            return SegmentsPerArc;
+        }
+
+        // Emit one cross-section sample (skirt → wall → lip, or just skirt
+        // for the outer-only editor preview). Caller passes:
+        //   `anchor`      = world position at the rail's top corner (surface-
+        //                   relative, includes yOffset).
+        //   `dir`         = unit direction from origin (surface up).
+        //   `surfaceR`    = surface radius at this sample (yOffset-independent).
+        //                   Used to anchor the skirt at ground when
+        //                   `floorAtSurface` is on.
+        //   `outward`     = unit vector pointing AWAY from the track center.
+        //   `inwardSign`  = winding flip so both rails face inward.
+        static void AppendCross(List<Vector3> verts, List<int> tris,
+            Vector3 anchor, Vector3 dir, float surfaceR, Vector3 outward,
+            in GuardOptions opt, int sampleIndex, int inwardSign)
+        {
+            // Skirt bottom: either fixed depth below the rail anchor, or
+            // anchored at the actual surface (so an elevated track shows its
+            // height in the rail).
+            Vector3 vBot = opt.floorAtSurface
+                ? dir * (surfaceR - opt.floorPad)
+                : anchor - dir * opt.skirtDepth;
+            Vector3 vSurf    = anchor;
+            Vector3 vWallTop = anchor + dir * opt.wallHeight;
+            Vector3 vLip     = vWallTop + outward * opt.lipOutward;
+
+            int baseIdx = verts.Count;
+
+            if (opt.crossSection == GuardCrossSection.OuterSkirtOnly)
+            {
+                // Just two verts per ring (bottom + surface) — outward face
+                // is the visible "side of the road" for editor previews.
+                verts.Add(vBot); verts.Add(vSurf);
+                if (sampleIndex == 0) return;
+                int p = baseIdx - 2;
+                int c = baseIdx;
+                EmitQuad(tris, p + 0, p + 1, c + 0, c + 1, inwardSign);
+                return;
+            }
+
+            verts.Add(vBot); verts.Add(vSurf); verts.Add(vWallTop); verts.Add(vLip);
+            if (sampleIndex == 0) return;
+
+            int p4 = baseIdx - 4;
+            int c4 = baseIdx;
+            EmitQuad(tris, p4 + 0, p4 + 1, c4 + 0, c4 + 1, inwardSign);
+            EmitQuad(tris, p4 + 1, p4 + 2, c4 + 1, c4 + 2, inwardSign);
+            EmitQuad(tris, p4 + 2, p4 + 3, c4 + 2, c4 + 3, inwardSign);
+        }
+
+        // A single endcap = a wall sweeping across the track width at a
+        // chain endpoint (start or finish). Geometry is the same Z section
+        // used on the side guards, swept perpendicular to the chain's
+        // tangent.
+        static void AppendEndcap(LevelData level, GlobeRaycaster raycaster, in GuardOptions opt,
+            List<Vector3> leftVerts, List<int> leftTris, List<Vector3> rightVerts, List<int> rightTris,
+            bool atFinish)
+        {
+            int idx = atFinish ? level.points.Count - 1 : 0;
+            Vector3 dir = level.DirOf(idx);
+            float surfaceR = raycaster != null ? raycaster.ResolveSurfaceRadius(dir) : level.NominalRadius;
+            float yOffset = level.points[idx].yOffset;
+            float topRadial = surfaceR + yOffset;
+
+            Vector3 tan = atFinish ? TangentAt(level, 1f) : TangentAt(level, 0f);
+            Vector3 width = Vector3.Cross(tan, dir).normalized;
+            // Outward = the chain's exit direction; for the finish that's
+            // forward, for the start that's backward.
+            Vector3 outward = atFinish ? tan.normalized : -tan.normalized;
+            float halfW = level.EffectiveTrackWidth * 0.5f;
+
+            const int WallSamples = 8;
+            for (int s = 0; s <= WallSamples; s++)
+            {
+                float u = (float)s / WallSamples - 0.5f;
+                Vector3 anchor = dir * topRadial + width * (level.EffectiveTrackWidth * u);
+                AppendCross(leftVerts, leftTris, anchor, dir, surfaceR, outward, opt, s, inwardSign: +1);
+            }
+            // Mirror on the right buffer is unnecessary — endcaps get appended
+            // to the left buffer by convention. They render under the same
+            // material as the left guard.
+            _ = rightVerts; _ = rightTris;
+        }
+
         static void EmitQuad(List<int> tris, int p0, int p1, int c0, int c1, int sign)
         {
             if (sign > 0)
@@ -231,135 +601,188 @@ namespace Dio.Level
             }
         }
 
-        /// Build a "spawn pad" — a short straight ribbon extending BACKWARD
-        /// from the start anchor along the level's start tangent, plus a
-        /// back wall (same Z-shape cross-section as the guardrails) so cars
-        /// reversing off the line can't drop into space.
-        ///
-        /// `length` is in world units along the geodesic; samples are
-        /// uniformly spaced along the geodesic from start back to a point
-        /// that's `length` away. The strip uses the SAME local Frenet frame
-        /// as the start of the track ribbon — same width, same banking — so
-        /// the seam between spawn pad and live track is invisible.
-        public static (Mesh ribbon, Mesh backWall) BuildSpawnPad(LevelData level, float length,
-            float wallHeight = 0.2f, float lipOutward = 0.05f, float skirtDepth = 1f, float surfaceLift = 0.08f)
+        public struct SpawnPadResult
         {
-            if (level == null || !level.HasMinimum || length <= 0.01f) return (null, null);
+            public Mesh ribbon;
+            public Mesh guardLeft;
+            public Mesh guardRight;
+            public Mesh backWall;
+        }
 
-            float r = level.planetRadius;
-            float halfW = level.trackWidth * 0.5f;
+        /// Short geodesic ribbon extending BACKWARD from the start anchor
+        /// along the level's start tangent, with full side guards (Z section)
+        /// and a perpendicular back wall at the FAR end (away from the start).
+        ///
+        /// Conceptually this is "one virtual extension behind the start
+        /// anchor". The ribbon's front end shares the same lateral frame and
+        /// radial height as the live track at t=0 of edge 0, so the seam
+        /// between spawn pad and main track is invisible. Side guards are
+        /// generated in the same Z section as the main BuildGuards output —
+        /// a car bouncing off a side rail at the back of the grid sees the
+        /// same wall it'd see anywhere else on the track.
+        ///
+        /// Y is held uniform at the start anchor's resolved height across
+        /// the entire pad, so back-row cars stand at the same height as the
+        /// polesitter and the back wall ends up at the same elevation.
+        public static SpawnPadResult BuildSpawnPad(LevelData level, float length,
+            GlobeRaycaster raycaster = null,
+            GuardOptions? guardOptions = null,
+            float surfaceLift = DefaultSurfaceLift)
+        {
+            if (level == null || !level.HasMinimum || length <= 0.01f) return default;
+            level.EnsureLinearChainNext();
 
-            // Start frame.
+            var opt = guardOptions ?? GuardOptions.Default;
+            // Lock Y across the entire pad so back-row cars sit at the same
+            // elevation as the polesitter and the seam to the live track is
+            // invisible (TrackBuilder.Build's cached anchor for index 0 ends
+            // up at exactly the same world position).
+            float halfW = level.EffectiveTrackWidth * 0.5f;
+
             Vector3 startDir = level.DirOf(0);
-            Vector3 startTan = TangentAt(level, 0f);          // forward along bezier at t=0
-            Vector3 startWidth = Vector3.Cross(startTan, startDir).normalized;
-            // Backward direction along the geodesic from the start anchor.
+            Vector3 startTan = TangentAt(level, 0f);
             Vector3 backTan = -startTan;
+            float startYOffset = level.points[0].yOffset;
+            float startSurfaceR = raycaster != null ? raycaster.ResolveSurfaceRadius(startDir) : level.NominalRadius;
+            float padTop = startSurfaceR + startYOffset;            // before surfaceLift
+            float padRibbonY = padTop + surfaceLift;                 // ribbon center radial
 
-            // Build a great-circle arc going `length` backward. Arc length
-            // L = angle * radius → angle = L / r.
+            float r = level.NominalRadius;
             float totalAngle = length / r;
             const int Samples = 24;
 
-            // Generate samples from t=0 (start anchor) to t=1 (length behind).
-            // Direction at sample t: rotate startDir by (-t * totalAngle)
-            // around the axis cross(startDir, backTan).
             Vector3 axis = Vector3.Cross(startDir, backTan).normalized;
-            if (axis.sqrMagnitude < 1e-6f) return (null, null);
+            if (axis.sqrMagnitude < 1e-6f) return default;
 
-            var verts = new List<Vector3>(Samples * 2 + 2);
-            var normals = new List<Vector3>(verts.Capacity);
-            var uvs = new List<Vector2>(verts.Capacity);
-            var tris = new List<int>(Samples * 6);
+            var ribbonVerts   = new List<Vector3>(Samples * 2 + 2);
+            var ribbonNormals = new List<Vector3>(ribbonVerts.Capacity);
+            var ribbonUvs     = new List<Vector2>(ribbonVerts.Capacity);
+            var ribbonTris    = new List<int>(Samples * 6);
 
-            // Ribbon: build from t=1 (back) → t=0 (start) so triangle winding
-            // matches the live track's forward direction.
+            var leftVerts  = new List<Vector3>();
+            var leftTris   = new List<int>();
+            var rightVerts = new List<Vector3>();
+            var rightTris  = new List<int>();
+
+            // Walk samples from FAR (s=0, back of pad) to NEAR (s=Samples,
+            // start anchor) so the strip's last ring exactly matches the
+            // live track's t=0 ring (same direction, same lateral frame,
+            // same radial Y). The seam is invisible by construction.
             for (int s = 0; s <= Samples; s++)
             {
-                float t = 1f - (float)s / Samples;          // 1 at back, 0 at start
-                Quaternion q = Quaternion.AngleAxis(t * totalAngle * Mathf.Rad2Deg, axis);
+                float frac = (float)s / Samples;            // 0 at back, 1 at start
+                float arcAngle = (1f - frac) * totalAngle;  // angle from start (0 at start, totalAngle at back)
+                Quaternion q = Quaternion.AngleAxis(arcAngle * Mathf.Rad2Deg, axis);
                 Vector3 dir = q * startDir;
                 Vector3 tan = q * startTan;
                 Vector3 w = Vector3.Cross(tan, dir).normalized;
-                Vector3 center = dir * (r + surfaceLift);
+                Vector3 center = dir * padRibbonY;
                 Vector3 vL = center + w * halfW;
                 Vector3 vR = center - w * halfW;
-                verts.Add(vL); verts.Add(vR);
-                normals.Add(dir); normals.Add(dir);
-                uvs.Add(new Vector2(s, 0)); uvs.Add(new Vector2(s, 1));
+                ribbonVerts.Add(vL); ribbonVerts.Add(vR);
+                ribbonNormals.Add(dir); ribbonNormals.Add(dir);
+                ribbonUvs.Add(new Vector2(s, 0)); ribbonUvs.Add(new Vector2(s, 1));
 
-                if (verts.Count >= 4)
+                if (ribbonVerts.Count >= 4)
                 {
-                    int v = verts.Count - 4;
-                    tris.Add(v + 0); tris.Add(v + 2); tris.Add(v + 1);
-                    tris.Add(v + 1); tris.Add(v + 2); tris.Add(v + 3);
+                    int v = ribbonVerts.Count - 4;
+                    ribbonTris.Add(v + 0); ribbonTris.Add(v + 2); ribbonTris.Add(v + 1);
+                    ribbonTris.Add(v + 1); ribbonTris.Add(v + 2); ribbonTris.Add(v + 3);
                 }
+
+                // Side guards along the entire pad. Same Z section as the
+                // main BuildGuards output, so a side rail at the back of the
+                // grid feels identical to one mid-track. surfaceR for the
+                // skirt is per-sample raycast (so the floor still hugs the
+                // ground beneath the elevated pad).
+                float surfHere = raycaster != null ? raycaster.ResolveSurfaceRadius(dir) : startSurfaceR;
+                Vector3 leftAnchor  = dir * padTop + w * (halfW + opt.outwardOffset);
+                Vector3 rightAnchor = dir * padTop - w * (halfW + opt.outwardOffset);
+                AppendCross(leftVerts,  leftTris,  leftAnchor,  dir, surfHere,  w,        opt, s, inwardSign: -1);
+                AppendCross(rightVerts, rightTris, rightAnchor, dir, surfHere, -1f * w,   opt, s, inwardSign: +1);
             }
 
             var ribbon = new Mesh
             {
                 name = "DioSpawnPad",
-                indexFormat = verts.Count > 65000
+                indexFormat = ribbonVerts.Count > 65000
                     ? UnityEngine.Rendering.IndexFormat.UInt32
                     : UnityEngine.Rendering.IndexFormat.UInt16,
             };
-            ribbon.SetVertices(verts);
-            ribbon.SetNormals(normals);
-            ribbon.SetUVs(0, uvs);
-            ribbon.SetTriangles(tris, 0);
+            ribbon.SetVertices(ribbonVerts);
+            ribbon.SetNormals(ribbonNormals);
+            ribbon.SetUVs(0, ribbonUvs);
+            ribbon.SetTriangles(ribbonTris, 0);
             ribbon.RecalculateBounds();
 
-            // Back wall: same Z cross-section as guardrails, swept across the
-            // track width at the back end of the pad. Two anchors (track-left,
-            // track-right) at the back, connected by Z sections.
+            Mesh BuildSubMesh(string n, List<Vector3> vv, List<int> tt)
+            {
+                var m = new Mesh
+                {
+                    name = n,
+                    indexFormat = vv.Count > 65000
+                        ? UnityEngine.Rendering.IndexFormat.UInt32
+                        : UnityEngine.Rendering.IndexFormat.UInt16,
+                };
+                m.SetVertices(vv);
+                m.SetTriangles(tt, 0);
+                m.RecalculateNormals();
+                m.RecalculateBounds();
+                return m;
+            }
+
+            var guardLeft  = BuildSubMesh("DioSpawnPadGuardLeft",  leftVerts,  leftTris);
+            var guardRight = BuildSubMesh("DioSpawnPadGuardRight", rightVerts, rightTris);
+
+            // Back wall at the FAR (s=0) end of the pad — perpendicular to
+            // the track tangent there, sweeping across the track width. Same
+            // Z section as the side guards.
             Quaternion qBack = Quaternion.AngleAxis(totalAngle * Mathf.Rad2Deg, axis);
             Vector3 backDir = qBack * startDir;
             Vector3 backTanRot = qBack * startTan;
             Vector3 backWidth = Vector3.Cross(backTanRot, backDir).normalized;
-            Vector3 backCenter = backDir * r;
+            float backSurfaceR = raycaster != null ? raycaster.ResolveSurfaceRadius(backDir) : startSurfaceR;
+            Vector3 backCenter = backDir * padTop;
+            Vector3 outward = -backTanRot.normalized;
 
             var wallVerts = new List<Vector3>();
             var wallTris = new List<int>();
             const int WallSamples = 8;
-            // outward = backTan-ish: face inward toward the track (i.e. the +tangent direction).
-            // The car is forward of the wall, so the wall's visible face must point along
-            // backTan's negative — toward the track direction (forward).
-            Vector3 outward = -backTanRot.normalized;
             for (int s = 0; s <= WallSamples; s++)
             {
-                float u = (float)s / WallSamples - 0.5f;       // -0.5 .. +0.5
-                Vector3 anchor = backCenter + backWidth * (level.trackWidth * u);
-                AppendZSection(wallVerts, wallTris, anchor, backDir, outward, wallHeight, lipOutward, skirtDepth, s, inwardSign: +1);
+                float u = (float)s / WallSamples - 0.5f;
+                Vector3 anchor = backCenter + backWidth * (level.EffectiveTrackWidth * u);
+                AppendCross(wallVerts, wallTris, anchor, backDir, backSurfaceR, outward, opt, s, inwardSign: +1);
             }
+            var backWall = BuildSubMesh("DioSpawnPadBackWall", wallVerts, wallTris);
 
-            var backWall = new Mesh
+            return new SpawnPadResult
             {
-                name = "DioSpawnPadBackWall",
-                indexFormat = wallVerts.Count > 65000
-                    ? UnityEngine.Rendering.IndexFormat.UInt32
-                    : UnityEngine.Rendering.IndexFormat.UInt16,
+                ribbon = ribbon,
+                guardLeft = guardLeft,
+                guardRight = guardRight,
+                backWall = backWall,
             };
-            backWall.SetVertices(wallVerts);
-            backWall.SetTriangles(wallTris, 0);
-            backWall.RecalculateNormals();
-            backWall.RecalculateBounds();
-
-            return (ribbon, backWall);
         }
 
-        /// World position at parametric distance t in [0..1] along the entire
-        /// chain. t is segment-uniform: each segment occupies 1/N of t, so a
-        /// 4-segment chain hits t=0.25 at the end of segment 0, etc.
-        public static Vector3 SampleAt(LevelData level, float t)
+        /// World position at parametric distance t in [0..1] along the linear
+        /// chain. Branched graphs collapse to the linear order returned by
+        /// `EnumerateEdges` here — fine for finish detection on the canonical
+        /// path, the only consumer for now.
+        public static Vector3 SampleAt(LevelData level, float t, GlobeRaycaster raycaster = null)
         {
             if (level == null || !level.HasMinimum) return Vector3.zero;
+            level.EnsureLinearChainNext();
             t = Mathf.Clamp01(t);
             int segments = level.points.Count - 1;
             float scaled = t * segments;
             int seg = Mathf.Min(segments - 1, Mathf.FloorToInt(scaled));
             float local = scaled - seg;
-            level.GetSegment(seg, out Vector3 a, out Vector3 ah, out Vector3 bh, out Vector3 b);
-            return GeodesicUtil.SphericalBezier(a, ah, bh, b, local) * level.planetRadius;
+            level.GetEdge(seg, seg + 1, out Vector3 a, out Vector3 ah, out Vector3 bh, out Vector3 b);
+            float yOffset = Mathf.Lerp(level.points[seg].yOffset, level.points[seg + 1].yOffset, local);
+            Vector3 dir = GeodesicUtil.SphericalBezier(a, ah, bh, b, local);
+            float surfaceR = raycaster != null ? raycaster.ResolveSurfaceRadius(dir) : level.NominalRadius;
+            return dir * (surfaceR + yOffset);
         }
 
         /// Tangent direction at parametric t — used to orient powerup boxes
@@ -367,12 +790,13 @@ namespace Dio.Level
         public static Vector3 TangentAt(LevelData level, float t)
         {
             if (level == null || !level.HasMinimum) return Vector3.forward;
+            level.EnsureLinearChainNext();
             t = Mathf.Clamp01(t);
             int segments = level.points.Count - 1;
             float scaled = t * segments;
             int seg = Mathf.Min(segments - 1, Mathf.FloorToInt(scaled));
             float local = scaled - seg;
-            level.GetSegment(seg, out Vector3 a, out Vector3 ah, out Vector3 bh, out Vector3 b);
+            level.GetEdge(seg, seg + 1, out Vector3 a, out Vector3 ah, out Vector3 bh, out Vector3 b);
             Vector3 dir = GeodesicUtil.SphericalBezier(a, ah, bh, b, local);
             Vector3 dirAhead = GeodesicUtil.SphericalBezier(a, ah, bh, b, Mathf.Min(1f, local + DerivEpsilon));
             Vector3 tan = (dirAhead - dir).normalized;
@@ -380,22 +804,26 @@ namespace Dio.Level
             return tan;
         }
 
-        /// Total arc length of the bezier chain in world units (sample-based,
-        /// since spherical cubic Beziers don't have a closed-form length).
-        public static float TotalArcLength(LevelData level)
+        /// Total arc length of the track in world units. Linear-chain assumption.
+        public static float TotalArcLength(LevelData level, GlobeRaycaster raycaster = null)
         {
             if (level == null || !level.HasMinimum) return 0f;
-            float r = level.planetRadius;
+            level.EnsureLinearChainNext();
+            float r = level.NominalRadius;
             const int Samples = 64;
             float total = 0f;
-            for (int seg = 0; seg < level.points.Count - 1; seg++)
+            foreach (var (i, j) in level.EnumerateEdges())
             {
-                level.GetSegment(seg, out Vector3 a, out Vector3 ah, out Vector3 bh, out Vector3 b);
-                Vector3 prev = a;
+                level.GetEdge(i, j, out Vector3 a, out Vector3 ah, out Vector3 bh, out Vector3 b);
+                Vector3 prev = GeodesicUtil.SphericalBezier(a, ah, bh, b, 0f) *
+                               (raycaster != null ? raycaster.ResolveSurfaceRadius(a) : r);
                 for (int s = 1; s <= Samples; s++)
                 {
-                    Vector3 cur = GeodesicUtil.SphericalBezier(a, ah, bh, b, (float)s / Samples);
-                    total += Vector3.Angle(prev, cur) * Mathf.Deg2Rad * r;
+                    float t = (float)s / Samples;
+                    Vector3 dir = GeodesicUtil.SphericalBezier(a, ah, bh, b, t);
+                    float surfaceR = raycaster != null ? raycaster.ResolveSurfaceRadius(dir) : r;
+                    Vector3 cur = dir * surfaceR;
+                    total += Vector3.Distance(prev, cur);
                     prev = cur;
                 }
             }
@@ -403,22 +831,17 @@ namespace Dio.Level
         }
 
         /// Project a world-space point onto the sampled bezier chain.
-        /// Returns the arc length from the start to the projected point.
-        /// For lap / finish detection on the server. Sampling-based:
-        /// 64 samples per segment, pick the sample with smallest angular
-        /// distance to the query direction. Monotonic enough for ranking
-        /// and finish-line crossing without surprises.
-        ///
-        /// `planetCenter`: world-space planet origin — usually
-        /// `RaceBootstrap.CurrentPlanet.transform.position`.
-        public static float ArcLengthOf(LevelData level, Vector3 worldPos, Vector3 planetCenter)
+        /// Returns the arc length from start to the projected point.
+        /// Linear-chain assumption — branches use `EnumerateEdges` order.
+        public static float ArcLengthOf(LevelData level, Vector3 worldPos, Vector3 planetCenter, GlobeRaycaster raycaster = null)
         {
             if (level == null || !level.HasMinimum) return 0f;
+            level.EnsureLinearChainNext();
 
             Vector3 dir = (worldPos - planetCenter).normalized;
             if (dir.sqrMagnitude < 1e-6f) return 0f;
 
-            float r = level.planetRadius;
+            float r = level.NominalRadius;
             const int Samples = 64;
 
             float bestArc = 0f;
@@ -427,20 +850,21 @@ namespace Dio.Level
             Vector3 prev = Vector3.zero;
             bool first = true;
 
-            for (int seg = 0; seg < level.points.Count - 1; seg++)
+            foreach (var (i, j) in level.EnumerateEdges())
             {
-                level.GetSegment(seg, out Vector3 a, out Vector3 ah, out Vector3 bh, out Vector3 b);
+                level.GetEdge(i, j, out Vector3 a, out Vector3 ah, out Vector3 bh, out Vector3 b);
                 for (int s = 0; s <= Samples; s++)
                 {
-                    // Skip the duplicate first sample of subsequent segments.
-                    if (seg > 0 && s == 0) continue;
+                    if (!first && s == 0) continue;
                     float t = (float)s / Samples;
                     Vector3 cur = GeodesicUtil.SphericalBezier(a, ah, bh, b, t);
-                    if (!first) arcCursor += Vector3.Angle(prev, cur) * Mathf.Deg2Rad * r;
+                    float surfaceR = raycaster != null ? raycaster.ResolveSurfaceRadius(cur) : r;
+                    Vector3 curWorld = cur * surfaceR;
+                    if (!first) arcCursor += Vector3.Distance(prev, curWorld);
                     first = false;
                     float d2 = (cur - dir).sqrMagnitude;
                     if (d2 < bestDist2) { bestDist2 = d2; bestArc = arcCursor; }
-                    prev = cur;
+                    prev = curWorld;
                 }
             }
             return bestArc;

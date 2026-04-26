@@ -6,81 +6,90 @@ namespace Dio.Level.EditorTools
 {
     /// Tools → Dio → Open Level Editor.
     ///
-    /// Author a track on a planet. Every segment between two anchors is a
-    /// spherical cubic Bezier (slerp-based De Casteljau, so samples stay on
-    /// the sphere). Each anchor stores `inHandle` (control on the segment
-    /// arriving at it) and `outHandle` (control on the segment leaving it),
-    /// stored as unit directions from the planet center.
+    /// Author a track on a Globe (world.fbx). Every edge between two anchors
+    /// is a spherical cubic Bezier (slerp-based De Casteljau, samples stay on
+    /// the unit sphere); the radial distance at each sample comes from a
+    /// raycast against the Globe mesh, so anchors hug the actual terrain
+    /// rather than an idealised sphere.
+    ///
+    /// Each anchor stores `inHandle` (control on every edge arriving at it)
+    /// and `outHandle` (control on every edge leaving it) as unit directions
+    /// from the planet center — shared across all incoming / outgoing edges
+    /// so a fork retains tangent continuity automatically.
     ///
     /// Interactions:
     ///   * Drag empty space (LMB or RMB): orbit camera.
     ///   * Wheel: zoom.
-    ///   * Click handle dot: drag the handle. The partner handle on the
-    ///     same anchor is reflected through the tangent plane to maintain
-    ///     C1 continuity, with the partner's angular distance cached at
-    ///     drag-start so its magnitude is preserved.
+    ///   * Click handle dot: drag the handle. The partner handle on the same
+    ///     anchor is reflected through the tangent plane to maintain C1.
     ///   * Click anchor: drag the anchor. Both handles ride along via a
-    ///     spherical rigid rotation `FromToRotation(oldDir, newDir)`, so
-    ///     their angles relative to the anchor are preserved exactly.
-    ///   * Shift + click an endpoint: append (or prepend) a new anchor and
-    ///     drag it. The two middle controls of the new segment default to
-    ///     the geodesic midpoint between the two anchors; if the previous
-    ///     endpoint is already shared with another segment, that anchor's
-    ///     other handle is reflected to maintain C1.
+    ///     spherical rigid rotation `FromToRotation(oldDir, newDir)`.
+    ///   * Shift held: yOffset arrows appear at every anchor; click+drag one
+    ///     to lift that anchor above the terrain. Visibility is gated solely
+    ///     on the live shift state; key events trigger a repaint so the
+    ///     arrows snap on/off cleanly.
+    ///   * Ctrl + click endpoint: append (or prepend) a new anchor and drag it.
     ///   * Del: remove the currently dragged anchor (chain must keep ≥2).
     ///
-    /// The world.fbx is rendered as actual 3D geometry through a
+    /// The Globe (world.fbx) is rendered as actual 3D geometry through a
     /// PreviewRenderUtility — track handles are drawn as a UI overlay on top
     /// without depth testing (back-hemisphere points are filtered out instead
-    /// of occluded). The scale multiplier maps the mesh's longest axis onto
-    /// the planet radius; "Auto-fit" recomputes that ratio.
+    /// of occluded). The Globe is auto-fitted to the level's `circumference`
+    /// (designer-facing) on every render. No placeholder sphere — what you
+    /// see is the actual asset cars will drive on.
     public class LevelEditorWindow : EditorWindow
     {
         const int BezierSegments = 28;
         const float HandlePickRadius = 14f;
-        const float AnchorPickRadius = 22f;   // 2x bigger pick radius for anchors
+        const float AnchorPickRadius = 22f;
         const float HandleDotRadius = 7f;
-        const float AnchorDotRadius = 16f;    // 2x bigger anchor dots
+        const float AnchorDotRadius = 16f;
 
         public LevelData level;
 
-        // World.fbx backdrop config.
-        public GameObject worldMeshAsset;
-        public float worldMeshRadiusMultiplier = 1f;
-        public bool showWorldMesh = true;
-        const string DefaultWorldFbxPath = "Assets/3d world/world.fbx";
-
-        // PreviewRenderUtility renders the world.fbx (and a translucent planet
-        // sphere) into an off-screen RT. We then `GUI.DrawTexture` it into the
-        // editor view and overlay handles on top with the same camera math.
+        // PreviewRenderUtility renders the Globe (and a translucent track
+        // ribbon) into an off-screen RT. We then `GUI.DrawTexture` it into
+        // the editor view and overlay handles on top with the same camera math.
         PreviewRenderUtility _pru;
 
-        // Cached draw list — flattens the FBX hierarchy into (mesh, matrix,
-        // material) entries, recomputed only when the asset / multiplier change.
-        struct DrawEntry { public Mesh mesh; public Matrix4x4 matrix; public Material[] materials; }
-        readonly List<DrawEntry> _worldDrawList = new List<DrawEntry>();
-        GameObject _cachedWorldRoot;
-        float _cachedWorldMultiplier;
-        Material _fallbackMat;
-        Mesh _planetMesh;
-        Material _planetMat;
+        // Cached snapshots + raycaster. Recomputed only when the source
+        // asset or circumference changes — the raycaster does software
+        // ray-vs-triangle queries against the snapshots so anchor heights
+        // can be resolved without spawning the Globe into a real scene.
+        readonly List<MeshSnapshot> _snapshots = new List<MeshSnapshot>();
+        GameObject _cachedSource;
+        float _cachedCircumference;
+        GlobeRaycaster _raycaster;
+
+        // Cached track ribbon mesh for the preview — rebuilt whenever the
+        // level changes structurally. We use the real TrackBuilder so the
+        // editor matches what cars will drive on.
+        Mesh _previewTrackMesh;
+        Material _previewTrackMat;
+        // Outer-only guard skirts — show road elevation without solid walls
+        // hiding the track surface.
+        Mesh _previewGuardLeft, _previewGuardRight;
+        Material _previewGuardMat;
+        int _previewLevelHash;
 
         // Camera state. Stored as a full Quaternion (not yaw/pitch) so the
-        // user can sweep across poles freely — no gimbal lock and no axis
-        // flip when dragging across the equator.
-        // `_orientation * Vector3.forward` = camera forward in world.
-        // Camera position = -(_orientation * Vector3.forward) * _distance.
+        // user can sweep across poles freely.
         Quaternion _orientation = Quaternion.LookRotation(
-            -new Vector3(0.7f, 0.5f, 0.5f).normalized,  // initial forward (back from camPos)
+            -new Vector3(0.7f, 0.5f, 0.5f).normalized,
             Vector3.up);
         float _distance = 600f;
         Vector2 _lastMouse;
         Rect _viewRect;
 
         // Drag state.
-        enum DragKind { None, Anchor, InHandle, OutHandle, Orbit, ShiftExtend }
+        enum DragKind { None, Anchor, InHandle, OutHandle, Orbit, ShiftExtend, YOffset, Fork }
         DragKind _dragKind = DragKind.None;
         int _draggedIndex = -1;
+        // Source anchor when forking. `_draggedIndex` is the NEW (cloned) point's
+        // index; `_forkSourceIdx` is the original anchor whose outgoing edge we
+        // just added. We keep them separate so the fork drag handler doesn't
+        // overwrite the source's shared outHandle.
+        int _forkSourceIdx = -1;
         // For C1 reflection: cache partner's angular distance at drag-start
         // so we preserve its "magnitude" while flipping its tangent.
         int _partnerAnchorIdx = -1;
@@ -98,11 +107,12 @@ namespace Dio.Level.EditorTools
         public static void NewLevel()
         {
             var asset = ScriptableObject.CreateInstance<LevelData>();
-            asset.planetRadius = 200f;
-            asset.seed = Random.Range(int.MinValue, int.MaxValue);
+            asset.circumference = 2f * Mathf.PI * 200f;   // legacy 200u radius default
+            asset.trackRatio = 1f;
             asset.points.Add(new TrackPoint { directionFromCenter = Vector3.up });
             asset.points.Add(new TrackPoint { directionFromCenter = Random.onUnitSphere });
             EnsureDefaultHandles(asset);
+            asset.EnsureLinearChainNext();
 
             const string dir = "Assets/Dio/Levels";
             if (!AssetDatabase.IsValidFolder(dir))
@@ -121,17 +131,17 @@ namespace Dio.Level.EditorTools
         void OnEnable()
         {
             EnsurePreviewUtility();
-            TryAutoLoadWorldMesh();
-            // Backfill handles on a level that was loaded before the bezier
-            // model existed — happens after every domain reload too, since
-            // the public `level` field is serialized across reloads.
-            if (level != null) EnsureDefaultHandles(level);
+            // Backfill handles + adjacency on a level loaded from disk that
+            // pre-dates one of those features. Idempotent.
+            if (level != null) { EnsureDefaultHandles(level); level.EnsureLinearChainNext(); }
+            // Repaint on any modifier-key change so shift-toggled arrows
+            // snap on/off without needing mouse motion.
+            wantsMouseEnterLeaveWindow = true;
         }
 
         void OnDisable()
         {
             if (_pru != null) { _pru.Cleanup(); _pru = null; }
-            // Keep _fallbackMat / _planetMat — they're cleaned up on AppDomain reload by Unity.
         }
 
         void EnsurePreviewUtility()
@@ -143,7 +153,6 @@ namespace Dio.Level.EditorTools
             _pru.camera.farClipPlane = 100000f;
             _pru.camera.clearFlags = CameraClearFlags.Color;
             _pru.camera.backgroundColor = new Color(0.10f, 0.11f, 0.16f, 1f);
-            // Two-light rim setup so silhouettes read against the dark BG.
             _pru.lights[0].intensity = 1.05f;
             _pru.lights[0].transform.rotation = Quaternion.Euler(40f, -25f, 0f);
             _pru.lights[1].intensity = 0.45f;
@@ -151,78 +160,87 @@ namespace Dio.Level.EditorTools
             _pru.ambientColor = new Color(0.32f, 0.34f, 0.42f, 1f);
         }
 
-        void TryAutoLoadWorldMesh()
+        // Refresh the snapshot cache + raycaster if the Globe asset or the
+        // level's circumference has changed since last call.
+        void EnsureSnapshots()
         {
-            if (worldMeshAsset == null)
+            var src = GlobeFactory.LoadSourceAsset();
+            float circ = level != null ? level.circumference : 0f;
+            if (_cachedSource == src && Mathf.Approximately(_cachedCircumference, circ) && _raycaster != null)
+                return;
+
+            _cachedSource = src;
+            _cachedCircumference = circ;
+            _snapshots.Clear();
+            if (src == null || level == null)
             {
-                var go = AssetDatabase.LoadMainAssetAtPath(DefaultWorldFbxPath) as GameObject;
-                if (go == null) return;
-                worldMeshAsset = go;
+                _raycaster = null;
+                return;
             }
-            // Run auto-fit even if the mesh was already serialized — across
-            // a domain reload the default multiplier (1) gets restored too,
-            // and at planet radius 200 a 1u mesh is invisibly small.
-            if (level != null) AutoFitWorldMesh();
+            float scale = GlobeFactory.ComputeAutofitScale(src, circ);
+            _snapshots.AddRange(GlobeFactory.CollectSnapshots(src, scale));
+            _raycaster = new GlobeRaycaster(_snapshots, level.NominalRadius);
+
+            Debug.Log($"[Dio Level Editor] Globe loaded: '{src.name}', " +
+                      $"{_snapshots.Count} sub-meshes, circumference={circ:F1}u, " +
+                      $"autofit scale={scale:F3}, nominal radius={level.NominalRadius:F1}u");
         }
 
-        // Auto-fit: scale so the mesh's longest single axis matches the planet
-        // radius (not extents.magnitude — for a roughly-spherical mesh of unit
-        // radius that's sqrt(3), which under-scaled by 1.7×). Picking the
-        // largest axis matches the user-visible "the mesh is this big".
-        void AutoFitWorldMesh()
+        // Rebuild the cached preview track mesh if the level data has changed.
+        // Hashing the points list is enough — anchor moves / handle drags /
+        // yOffset edits all touch it.
+        void EnsurePreviewTrack()
         {
-            if (worldMeshAsset == null || level == null || level.planetRadius <= 0f) return;
-            Bounds combined = ComputeWorldMeshBounds();
-            float maxExtent = Mathf.Max(combined.extents.x, Mathf.Max(combined.extents.y, combined.extents.z));
-            if (maxExtent > 1e-5f) worldMeshRadiusMultiplier = level.planetRadius / maxExtent;
-            _cachedWorldRoot = null; // force draw-list rebuild with new multiplier
-        }
+            if (level == null) { _previewTrackMesh = null; return; }
+            int hash = ComputeLevelHash(level);
+            if (_previewTrackMesh != null && hash == _previewLevelHash) return;
 
-        Bounds ComputeWorldMeshBounds()
-        {
-            var filters = worldMeshAsset.GetComponentsInChildren<MeshFilter>(true);
-            bool any = false;
-            Bounds b = new Bounds(Vector3.zero, Vector3.zero);
-            foreach (var mf in filters)
+            _previewLevelHash = hash;
+            _previewTrackMesh = TrackBuilder.Build(level, _raycaster, surfaceLift: 0.05f);
+
+            // Outer-skirt-only guards: show the elevation step without
+            // building solid walls that would occlude the track.
+            var guardOpt = TrackBuilder.GuardOptions.Default;
+            guardOpt.crossSection   = TrackBuilder.GuardCrossSection.OuterSkirtOnly;
+            guardOpt.floorAtSurface = true;
+            guardOpt.floorPad       = TrackBuilder.DefaultFloorPad;
+            guardOpt.outwardOffset  = 0.05f;
+            guardOpt.addEndcaps     = false;
+            (_previewGuardLeft, _previewGuardRight) = TrackBuilder.BuildGuards(level, _raycaster, guardOpt);
+
+            if (_previewTrackMat == null)
             {
-                if (mf.sharedMesh == null) continue;
-                Bounds local = mf.sharedMesh.bounds;
-                Matrix4x4 mat = WorldMeshLocalToRoot(mf.transform);
-                // Take the 8 corners of the local AABB and transform them — this
-                // handles rotation correctly. The previous code transformed only
-                // the extents vector, which collapsed under non-axis-aligned
-                // child rotations and could give bogus tiny bounds.
-                Vector3 lc = local.center;
-                Vector3 le = local.extents;
-                Vector3 min = Vector3.positiveInfinity, max = Vector3.negativeInfinity;
-                for (int sx = -1; sx <= 1; sx += 2)
-                for (int sy = -1; sy <= 1; sy += 2)
-                for (int sz = -1; sz <= 1; sz += 2)
+                Shader sh = Shader.Find("Unlit/Color") ?? Shader.Find("Standard");
+                _previewTrackMat = new Material(sh) { hideFlags = HideFlags.HideAndDontSave, name = "DioTrackPreview" };
+                _previewTrackMat.color = new Color(0.20f, 0.22f, 0.26f, 1f);
+            }
+            if (_previewGuardMat == null)
+            {
+                Shader sh = Shader.Find("Unlit/Color") ?? Shader.Find("Standard");
+                _previewGuardMat = new Material(sh) { hideFlags = HideFlags.HideAndDontSave, name = "DioGuardPreview" };
+                _previewGuardMat.color = new Color(0.32f, 0.30f, 0.36f, 1f);
+            }
+        }
+
+        static int ComputeLevelHash(LevelData lv)
+        {
+            unchecked
+            {
+                int h = 17;
+                h = h * 31 + lv.points.Count;
+                h = h * 31 + lv.circumference.GetHashCode();
+                h = h * 31 + lv.trackWidth.GetHashCode();
+                h = h * 31 + lv.trackRatio.GetHashCode();
+                for (int i = 0; i < lv.points.Count; i++)
                 {
-                    Vector3 corner = lc + new Vector3(sx * le.x, sy * le.y, sz * le.z);
-                    Vector3 wc = mat.MultiplyPoint3x4(corner);
-                    min = Vector3.Min(min, wc);
-                    max = Vector3.Max(max, wc);
+                    var p = lv.points[i];
+                    h = h * 31 + p.directionFromCenter.GetHashCode();
+                    h = h * 31 + p.inHandle.GetHashCode();
+                    h = h * 31 + p.outHandle.GetHashCode();
+                    h = h * 31 + p.yOffset.GetHashCode();
                 }
-                Bounds wb = new Bounds((min + max) * 0.5f, (max - min));
-                if (!any) { b = wb; any = true; } else b.Encapsulate(wb);
+                return h;
             }
-            return b;
-        }
-
-        // Walk parents up to (but not including) `worldMeshAsset.transform`
-        // to compute the local-to-root matrix without instantiating the prefab.
-        Matrix4x4 WorldMeshLocalToRoot(Transform t)
-        {
-            Matrix4x4 m = Matrix4x4.identity;
-            var rootT = worldMeshAsset.transform;
-            var cur = t;
-            while (cur != null && cur != rootT)
-            {
-                m = Matrix4x4.TRS(cur.localPosition, cur.localRotation, cur.localScale) * m;
-                cur = cur.parent;
-            }
-            return m;
         }
 
         void OnGUI()
@@ -231,13 +249,15 @@ namespace Dio.Level.EditorTools
             EditorGUILayout.BeginHorizontal(EditorStyles.toolbar);
             EditorGUI.BeginChangeCheck();
             level = (LevelData)EditorGUILayout.ObjectField("Level", level, typeof(LevelData), false);
-            if (EditorGUI.EndChangeCheck() && level != null) EnsureDefaultHandles(level);
+            if (EditorGUI.EndChangeCheck() && level != null)
+            {
+                EnsureDefaultHandles(level);
+                level.EnsureLinearChainNext();
+            }
             if (GUILayout.Button("New", EditorStyles.toolbarButton, GUILayout.Width(60))) NewLevel();
             GUILayout.FlexibleSpace();
-            showWorldMesh = GUILayout.Toggle(showWorldMesh, "World mesh", EditorStyles.toolbarButton, GUILayout.Width(80));
-            if (GUILayout.Button("Auto-fit", EditorStyles.toolbarButton, GUILayout.Width(64))) AutoFitWorldMesh();
             if (level != null)
-                EditorGUILayout.LabelField($"R={level.planetRadius:0}  pts={level.points.Count}", GUILayout.Width(160));
+                EditorGUILayout.LabelField($"C={level.circumference:0}  pts={level.points.Count}", GUILayout.Width(160));
             EditorGUILayout.EndHorizontal();
 
             if (level == null)
@@ -247,15 +267,10 @@ namespace Dio.Level.EditorTools
             }
 
             EditorGUI.BeginChangeCheck();
-            level.planetRadius = EditorGUILayout.FloatField("Planet radius", level.planetRadius);
-            level.trackWidth = EditorGUILayout.FloatField("Track width", level.trackWidth);
-            level.seed = EditorGUILayout.IntField("Seed", level.seed);
-            var prevMesh = worldMeshAsset;
-            worldMeshAsset = (GameObject)EditorGUILayout.ObjectField("World mesh (FBX)", worldMeshAsset, typeof(GameObject), false);
-            float prevMul = worldMeshRadiusMultiplier;
-            worldMeshRadiusMultiplier = EditorGUILayout.FloatField("World mesh scale", worldMeshRadiusMultiplier);
-            if (worldMeshAsset != prevMesh || !Mathf.Approximately(prevMul, worldMeshRadiusMultiplier))
-                _cachedWorldRoot = null;
+            level.circumference = Mathf.Max(1f, EditorGUILayout.FloatField("Circumference", level.circumference));
+            level.trackWidth = EditorGUILayout.FloatField("Track width (canonical)", level.trackWidth);
+            level.trackRatio = Mathf.Max(0.05f, EditorGUILayout.FloatField("Track width ratio", level.trackRatio));
+            EditorGUILayout.LabelField("    Effective width", $"{level.EffectiveTrackWidth:F2}u");
             if (EditorGUI.EndChangeCheck()) Save();
 
             Rect view = GUILayoutUtility.GetRect(0, 0, GUILayout.ExpandWidth(true), GUILayout.ExpandHeight(true));
@@ -265,19 +280,43 @@ namespace Dio.Level.EditorTools
             HandleKeyboard();
 
             EditorGUILayout.LabelField(
-                "Drag empty: orbit  ·  Wheel: zoom  ·  Click anchor / handle: drag  ·  Shift+drag endpoint: extend  ·  Del: remove anchor",
+                "Drag empty: orbit  ·  Wheel: zoom  ·  Click anchor / handle: drag  ·  Hold Shift: yOffset arrows  ·  Ctrl+endpoint: extend track  ·  Del: remove anchor",
                 EditorStyles.miniLabel);
         }
 
         void HandleKeyboard()
         {
             var e = Event.current;
+            // Repaint on shift press / release so the yOffset arrows toggle
+            // visibility immediately. Without this, the editor only repaints
+            // on mouse motion / focus changes — leaving the arrows in a
+            // stale "phantom" state when the user just taps shift.
+            if (e.type == EventType.KeyDown || e.type == EventType.KeyUp)
+            {
+                if (e.keyCode == KeyCode.LeftShift || e.keyCode == KeyCode.RightShift)
+                    Repaint();
+            }
             if (e.type == EventType.KeyDown && e.keyCode == KeyCode.Delete)
             {
                 if (_dragKind == DragKind.Anchor && _draggedIndex >= 0 && level.points.Count > 2)
                 {
                     Undo.RecordObject(level, "Delete Point");
                     level.points.RemoveAt(_draggedIndex);
+                    // Repair adjacency lists referencing the deleted index.
+                    int dead = _draggedIndex;
+                    for (int i = 0; i < level.points.Count; i++)
+                    {
+                        var p = level.points[i];
+                        if (p.next == null) continue;
+                        for (int k = p.next.Count - 1; k >= 0; k--)
+                        {
+                            int v = p.next[k];
+                            if (v == dead) p.next.RemoveAt(k);
+                            else if (v > dead) p.next[k] = v - 1;
+                        }
+                        level.points[i] = p;
+                    }
+                    level.EnsureLinearChainNext();
                     _draggedIndex = -1;
                     _dragKind = DragKind.None;
                     Save();
@@ -291,9 +330,6 @@ namespace Dio.Level.EditorTools
 
         void HandleViewInput(Rect rect)
         {
-            // Picking math (RaycastSphere / TryWorldToScreen) reads _viewRect,
-            // so set it before they run. DrawScene refreshes it again later;
-            // the value is identical either way.
             _viewRect = rect;
 
             Event e = Event.current;
@@ -307,7 +343,11 @@ namespace Dio.Level.EditorTools
                     if (e.button == 0)
                     {
                         var pick = PickAtMouse(e.mousePosition);
-                        if (pick.kind == DragKind.Anchor && e.shift && IsEndpoint(pick.index))
+                        if (pick.kind == DragKind.Anchor && e.shift)
+                        {
+                            BeginYOffsetDrag(pick.index);
+                        }
+                        else if (pick.kind == DragKind.Anchor && e.control && IsEndpoint(pick.index))
                         {
                             BeginExtendFromEndpoint(pick.index, e.mousePosition);
                         }
@@ -317,7 +357,6 @@ namespace Dio.Level.EditorTools
                         }
                         else
                         {
-                            // Empty click → orbit.
                             _dragKind = DragKind.Orbit;
                             _draggedIndex = -1;
                         }
@@ -326,15 +365,27 @@ namespace Dio.Level.EditorTools
                     }
                     else if (e.button == 1)
                     {
-                        _dragKind = DragKind.Orbit;
+                        // Right-click on a non-endpoint anchor = fork the
+                        // track from there to a new dragged point. Right-
+                        // click on empty space (or on the start/finish) =
+                        // orbit camera.
+                        var pick = PickAtMouse(e.mousePosition);
+                        if (pick.kind == DragKind.Anchor && !IsEndpoint(pick.index))
+                        {
+                            BeginForkFromAnchor(pick.index, e.mousePosition);
+                        }
+                        else
+                        {
+                            _dragKind = DragKind.Orbit;
+                        }
                         GUIUtility.hotControl = controlID;
                         e.Use();
                     }
                 }
                 else if (e.type == EventType.ScrollWheel)
                 {
-                    _distance = Mathf.Clamp(_distance * (1f + e.delta.y * 0.05f),
-                        level.planetRadius * 1.05f, level.planetRadius * 12f);
+                    float r = level.NominalRadius;
+                    _distance = Mathf.Clamp(_distance * (1f + e.delta.y * 0.05f), r * 1.05f, r * 12f);
                     Repaint();
                     e.Use();
                 }
@@ -353,17 +404,17 @@ namespace Dio.Level.EditorTools
                         break;
 
                     case DragKind.Anchor:
-                        if (_draggedIndex >= 0 && RaycastSphere(e.mousePosition, out Vector3 hitA))
+                        if (_draggedIndex >= 0 && PickDirection(e.mousePosition, out Vector3 dirA))
                         {
-                            MoveAnchorRigid(_draggedIndex, hitA.normalized);
+                            MoveAnchorRigid(_draggedIndex, dirA);
                             Save(); Repaint();
                         }
                         break;
 
                     case DragKind.ShiftExtend:
-                        if (_draggedIndex >= 0 && RaycastSphere(e.mousePosition, out Vector3 hitE))
+                        if (_draggedIndex >= 0 && PickDirection(e.mousePosition, out Vector3 dirE))
                         {
-                            SetAnchorDirOnly(_draggedIndex, hitE.normalized);
+                            SetAnchorDirOnly(_draggedIndex, dirE);
                             ResetExtendHandles(_draggedIndex);
                             Save(); Repaint();
                         }
@@ -371,10 +422,50 @@ namespace Dio.Level.EditorTools
 
                     case DragKind.InHandle:
                     case DragKind.OutHandle:
-                        if (_draggedIndex >= 0 && RaycastSphere(e.mousePosition, out Vector3 hitH))
+                        if (_draggedIndex >= 0 && PickDirection(e.mousePosition, out Vector3 dirH))
                         {
-                            SetHandle(_draggedIndex, _dragKind, hitH.normalized);
+                            // Project handle to the tangent plane at the anchor —
+                            // a handle that drifts radially has no useful effect
+                            // on the bezier and visually looks broken. We keep
+                            // the unit direction but slide it onto the great
+                            // circle perpendicular to the radial.
+                            var anchor = level.points[_draggedIndex];
+                            Vector3 anchorDir = anchor.directionFromCenter.sqrMagnitude > 1e-6f
+                                ? anchor.directionFromCenter.normalized : Vector3.up;
+                            Vector3 tan = dirH - Vector3.Dot(dirH, anchorDir) * anchorDir;
+                            if (tan.sqrMagnitude > 1e-8f)
+                            {
+                                // Mix anchor radial component (small) with
+                                // tangent plane projection (dominant). The
+                                // resulting normalized vector is still a unit
+                                // direction "near" the anchor on the unit
+                                // sphere, but constrained to vary only in the
+                                // tangent plane — which is the bezier-meaningful
+                                // axis.
+                                dirH = (anchorDir + tan.normalized * 0.6f).normalized;
+                            }
+                            SetHandle(_draggedIndex, _dragKind, dirH);
                             ReflectPartnerHandle(_draggedIndex, _dragKind);
+                            Save(); Repaint();
+                        }
+                        break;
+
+                    case DragKind.YOffset:
+                        if (_draggedIndex >= 0)
+                        {
+                            DragYOffset(_draggedIndex, e.mousePosition);
+                            Save(); Repaint();
+                        }
+                        break;
+
+                    case DragKind.Fork:
+                        if (_draggedIndex >= 0 && _forkSourceIdx >= 0 && PickDirection(e.mousePosition, out Vector3 dirF))
+                        {
+                            SetAnchorDirOnly(_draggedIndex, dirF);
+                            // Recompute only the NEW point's inHandle; the
+                            // source's outHandle is shared with its original
+                            // outgoing edge and must not be touched.
+                            UpdateForkInHandle(_forkSourceIdx, _draggedIndex);
                             Save(); Repaint();
                         }
                         break;
@@ -388,16 +479,66 @@ namespace Dio.Level.EditorTools
                 _dragKind = DragKind.None;
                 _draggedIndex = -1;
                 _partnerAnchorIdx = -1;
+                _forkSourceIdx = -1;
                 e.Use();
             }
         }
 
+        // Right-click drag from an interior anchor: clones the anchor at the
+        // drag location, adds an outgoing edge from the source to the clone.
+        // The source's outHandle is REUSED (shared) by the new edge — that's
+        // the user-spec'd "control points shared between original and new".
+        // The new clone is a leaf (no outgoing) until the user wires it up.
+        void BeginForkFromAnchor(int sourceIdx, Vector2 mouse)
+        {
+            Undo.RecordObject(level, "Fork Track");
+            var source = level.points[sourceIdx];
+            var clone = new TrackPoint
+            {
+                directionFromCenter = source.directionFromCenter,
+                yOffset = source.yOffset,
+                bank = source.bank,
+                inHandle = Vector3.zero,
+                outHandle = Vector3.zero,
+                next = new List<int>(),
+            };
+            int newIdx = level.points.Count;
+            level.points.Add(clone);
+
+            var src = level.points[sourceIdx];
+            if (src.next == null) src.next = new List<int>();
+            src.next.Add(newIdx);
+            level.points[sourceIdx] = src;
+
+            _dragKind = DragKind.Fork;
+            _draggedIndex = newIdx;
+            _forkSourceIdx = sourceIdx;
+
+            if (PickDirection(mouse, out Vector3 dir))
+            {
+                SetAnchorDirOnly(newIdx, dir);
+                UpdateForkInHandle(sourceIdx, newIdx);
+            }
+            Save();
+        }
+
+        // Set the new (forked) anchor's inHandle to the geodesic midpoint
+        // between source and new — keeps the new edge near-geodesic without
+        // requiring the artist to wire up handles immediately.
+        void UpdateForkInHandle(int sourceIdx, int newIdx)
+        {
+            Vector3 A = level.DirOf(sourceIdx);
+            Vector3 B = level.DirOf(newIdx);
+            var nw = level.points[newIdx];
+            nw.inHandle = Vector3.Slerp(A, B, 2f / 3f).normalized;
+            level.points[newIdx] = nw;
+        }
+
         struct Pick { public DragKind kind; public int index; }
 
-        // Pick handles first (smaller, drawn on top), then anchors. Ignore
-        // points on the back hemisphere so click-throughs don't grab the
-        // wrong dot. Returns DragKind.None if nothing was within the
-        // tolerance circle.
+        // Pick handles first (smaller, drawn on top), then anchors. Use the
+        // raycaster to lift dots to their actual rendered position so picking
+        // matches what the user sees.
         Pick PickAtMouse(Vector2 mouse)
         {
             Vector3 camDir = ComputeCameraPosition().normalized;
@@ -408,24 +549,24 @@ namespace Dio.Level.EditorTools
             for (int i = 0; i < level.points.Count; i++)
             {
                 var p = level.points[i];
-                bool hasIn = (i > 0) && p.inHandle.sqrMagnitude > 1e-6f;
-                bool hasOut = (i < level.points.Count - 1) && p.outHandle.sqrMagnitude > 1e-6f;
+                bool hasIn = p.inHandle.sqrMagnitude > 1e-6f;
+                bool hasOut = p.outHandle.sqrMagnitude > 1e-6f;
+                float anchorH = level.ResolveHeight(i, _raycaster);
 
                 if (hasIn && Vector3.Dot(p.inHandle.normalized, camDir) > 0f
-                    && TryWorldToScreen(p.inHandle.normalized * level.planetRadius, out Vector2 sIn))
+                    && TryWorldToScreen(p.inHandle.normalized * anchorH, out Vector2 sIn))
                 {
                     float d = (sIn - mouse).sqrMagnitude;
                     if (d < bestDist2) { bestDist2 = d; best = new Pick { kind = DragKind.InHandle, index = i }; }
                 }
                 if (hasOut && Vector3.Dot(p.outHandle.normalized, camDir) > 0f
-                    && TryWorldToScreen(p.outHandle.normalized * level.planetRadius, out Vector2 sOut))
+                    && TryWorldToScreen(p.outHandle.normalized * anchorH, out Vector2 sOut))
                 {
                     float d = (sOut - mouse).sqrMagnitude;
                     if (d < bestDist2) { bestDist2 = d; best = new Pick { kind = DragKind.OutHandle, index = i }; }
                 }
             }
 
-            // If a handle is picked, prefer that. Otherwise try anchors.
             if (best.kind != DragKind.None) return best;
 
             float anchorDist2 = AnchorPickRadius * AnchorPickRadius;
@@ -433,7 +574,8 @@ namespace Dio.Level.EditorTools
             {
                 Vector3 dir = level.DirOf(i);
                 if (Vector3.Dot(dir, camDir) <= 0f) continue;
-                Vector3 wp = dir * level.planetRadius;
+                float anchorH = level.ResolveHeight(i, _raycaster);
+                Vector3 wp = dir * anchorH;
                 if (TryWorldToScreen(wp, out Vector2 sp))
                 {
                     float d = (sp - mouse).sqrMagnitude;
@@ -443,14 +585,16 @@ namespace Dio.Level.EditorTools
             return best;
         }
 
-        bool IsEndpoint(int i) => i == 0 || i == level.points.Count - 1;
+        bool IsEndpoint(int i)
+        {
+            if (i == 0) return true;
+            if (i == level.points.Count - 1) return true;
+            // A dangling node with no outgoing edges qualifies too — same
+            // behaviour but graph-aware (matters once branches arrive).
+            var nx = level.points[i].next;
+            return nx == null || nx.Count == 0;
+        }
 
-        // Quaternion-based orbit. LMB drag rotates the camera around its own
-        // current up + right axes (so the cursor tracks any direction across
-        // the planet — no equator/pole singularity). RMB drag is an arcball
-        // roll: torque = cross(mouseFromCenter, mouseDelta), so dragging
-        // sideways at the bottom of the view rolls opposite to dragging
-        // sideways at the top — the natural "spin the trackball" feel.
         void ApplyOrbitDrag(Vector2 mouseDelta, int mouseButton)
         {
             const float Sensitivity = 0.4f;
@@ -458,17 +602,6 @@ namespace Dio.Level.EditorTools
 
             if (mouseButton == 0)
             {
-                // Sign convention: drag right → world drags right under the
-                // cursor → camera orbits LEFT around the world's up axis.
-                // AngleAxis(+angle, up) rotates orientation CCW around up,
-                // which sends forward from +Z toward +X, which puts camPos
-                // (−forward × distance) at −X — i.e. WEST of the start. So
-                // a positive dx maps directly to a positive angle around up.
-                //
-                // Same idea for dy in Unity's Y-down GUI space: drag down
-                // (dy > 0) → camera tilts down to follow the cursor →
-                // forward picks up a +Y component → camPos drops below
-                // origin. AngleAxis(+angle, right) does that.
                 Quaternion qx = Quaternion.AngleAxis(mouseDelta.x * Sensitivity, up);
                 Quaternion qy = Quaternion.AngleAxis(mouseDelta.y * Sensitivity, right);
                 _orientation = qy * qx * _orientation;
@@ -476,12 +609,6 @@ namespace Dio.Level.EditorTools
             }
             else if (mouseButton == 1)
             {
-                // Arcball roll. _lastMouse is the cursor position AFTER
-                // updating in HandleViewInput, i.e. the live pos. Torque is
-                // the z-component of cross(fromCenter, mouseDelta) — flips
-                // sign across the view's vertical or horizontal centerline,
-                // so a left-right drag at the bottom rolls opposite to the
-                // same drag at the top (matches the user's spec).
                 Vector2 center = _viewRect.center;
                 Vector2 fromCenter = _lastMouse - center;
                 float radius = Mathf.Max(1f, Mathf.Min(_viewRect.width, _viewRect.height) * 0.5f);
@@ -502,21 +629,51 @@ namespace Dio.Level.EditorTools
                 CachePartnerForReflection(p.index, p.kind);
         }
 
-        // The partner is the OTHER handle on the same anchor (in vs. out).
-        // Cache its angular distance to the anchor so reflection preserves
-        // its "magnitude" while flipping the tangent direction.
+        void BeginYOffsetDrag(int anchorIndex)
+        {
+            Undo.RecordObject(level, "YOffset Drag");
+            _dragKind = DragKind.YOffset;
+            _draggedIndex = anchorIndex;
+            _partnerAnchorIdx = -1;
+        }
+
+        // Drag the cursor along the radial line from the anchor's surface
+        // position outward; the projected distance becomes the new yOffset.
+        void DragYOffset(int anchorIndex, Vector2 mouse)
+        {
+            Vector3 anchorDir = level.DirOf(anchorIndex);
+            float surfaceR = _raycaster != null ? _raycaster.ResolveSurfaceRadius(anchorDir) : level.NominalRadius;
+            Vector3 basePos = anchorDir * surfaceR;
+            Ray mouseRay = ScreenPointToRay(mouse, ComputeCameraPosition());
+            float s = ClosestPointOnLineToRay(basePos, anchorDir, mouseRay);
+            var p = level.points[anchorIndex];
+            p.yOffset = Mathf.Max(0f, s);
+            level.points[anchorIndex] = p;
+        }
+
+        static float ClosestPointOnLineToRay(Vector3 lineOrigin, Vector3 lineDir, Ray ray)
+        {
+            Vector3 w0 = lineOrigin - ray.origin;
+            float a = Vector3.Dot(lineDir, lineDir);
+            float b = Vector3.Dot(lineDir, ray.direction);
+            float c = Vector3.Dot(ray.direction, ray.direction);
+            float d = Vector3.Dot(lineDir, w0);
+            float ee = Vector3.Dot(ray.direction, w0);
+            float denom = a * c - b * b;
+            if (Mathf.Abs(denom) < 1e-6f) return 0f;
+            return (b * ee - c * d) / denom;
+        }
+
         void CachePartnerForReflection(int anchor, DragKind draggedKind)
         {
             var p = level.points[anchor];
             Vector3 P = p.directionFromCenter.normalized;
             Vector3 partner = (draggedKind == DragKind.OutHandle) ? p.inHandle : p.outHandle;
             bool partnerExists = partner.sqrMagnitude > 1e-6f;
-            // For an interior anchor, both handles must exist. For an
-            // endpoint there's no partner — skip reflection.
-            bool partnerIsValidSide =
-                (draggedKind == DragKind.OutHandle && anchor > 0) ||
-                (draggedKind == DragKind.InHandle && anchor < level.points.Count - 1);
-            if (partnerExists && partnerIsValidSide)
+            // Endpoints can lack a partner — first anchor has no inHandle,
+            // last has no outHandle. Skip reflection then.
+            bool hasPartnerSide = partnerExists;
+            if (hasPartnerSide)
             {
                 _partnerAngularDist = Mathf.Acos(Mathf.Clamp(Vector3.Dot(P, partner.normalized), -1f, 1f));
                 _partnerAnchorIdx = anchor;
@@ -524,48 +681,119 @@ namespace Dio.Level.EditorTools
             }
         }
 
-        // Append (or prepend) a clone of the endpoint and put it under the
-        // shift-drag cursor. Handles are reset to defaults on each drag tick.
+        // Ctrl + click an endpoint extends the track. The user wants to keep
+        // dragging the SAME anchor they clicked; the OLD position becomes a
+        // new interior clone that sits between the previous chain and the
+        // dragged anchor. So:
+        //   * Insert a clone at the endpoint's index, shifting the endpoint
+        //     to a higher index.
+        //   * The chain rewires automatically because we adjust every `next`
+        //     entry that pointed to the OLD endpoint index — they now point
+        //     to the clone (= same index, replaced entity), and the clone's
+        //     own `next` is a fresh list pointing to the (shifted) old endpoint.
+        //   * We drag the OLD endpoint at its NEW (shifted) index, so the
+        //     mouse keeps the anchor the user clicked, never an orphan clone.
         void BeginExtendFromEndpoint(int endpoint, Vector2 mouse)
         {
             Undo.RecordObject(level, "Extend Track");
-            var clone = level.points[endpoint];
+            int oldCount = level.points.Count;
+            var oldEndpoint = level.points[endpoint];
+
+            var clone = oldEndpoint;
             clone.inHandle = Vector3.zero;
             clone.outHandle = Vector3.zero;
-            int newIndex;
+            clone.next = new List<int>();
+
+            int draggedIdx;
             if (endpoint == 0)
             {
+                // Prepend: clone takes index 0, old start shifts to index 1.
+                // Every existing next entry shifts +1.
                 level.points.Insert(0, clone);
-                newIndex = 0;
+                draggedIdx = 1;
+                for (int i = 0; i < level.points.Count; i++)
+                {
+                    var pp = level.points[i];
+                    if (pp.next != null)
+                        for (int k = 0; k < pp.next.Count; k++) pp.next[k] += 1;
+                    level.points[i] = pp;
+                }
+                // Wire the new start to the (shifted) old start.
+                var c = level.points[0];
+                if (c.next == null) c.next = new List<int>();
+                if (!c.next.Contains(1)) c.next.Add(1);
+                level.points[0] = c;
             }
             else
             {
-                level.points.Add(clone);
-                newIndex = level.points.Count - 1;
+                // Append: clone takes the OLD endpoint's index, old endpoint
+                // shifts to (endpoint + 1). Existing edges that pointed to
+                // the OLD endpoint now correctly point to CLONE (same index,
+                // newly inserted entity) — DON'T shift those. Only entries
+                // pointing to indices STRICTLY GREATER than `endpoint` need
+                // to shift, since those entities just moved one slot down.
+                level.points.Insert(endpoint, clone);
+                draggedIdx = endpoint + 1;
+                for (int i = 0; i < level.points.Count; i++)
+                {
+                    if (i == endpoint) continue; // the clone itself, no edges yet
+                    var pp = level.points[i];
+                    if (pp.next != null)
+                        for (int k = 0; k < pp.next.Count; k++)
+                            if (pp.next[k] > endpoint) pp.next[k] += 1;
+                    level.points[i] = pp;
+                }
+                // Wire the clone (now at `endpoint`) to the shifted old endpoint.
+                var c = level.points[endpoint];
+                if (c.next == null) c.next = new List<int>();
+                if (!c.next.Contains(endpoint + 1)) c.next.Add(endpoint + 1);
+                level.points[endpoint] = c;
             }
+
+            // Safety net — fills in any other missing linear-chain links and
+            // normalises null next lists (no-op when everything was wired).
+            level.EnsureLinearChainNext();
+
             _dragKind = DragKind.ShiftExtend;
-            _draggedIndex = newIndex;
-            if (RaycastSphere(mouse, out Vector3 hit))
+            _draggedIndex = draggedIdx;
+            if (PickDirection(mouse, out Vector3 dir))
             {
-                SetAnchorDirOnly(newIndex, hit.normalized);
-                ResetExtendHandles(newIndex);
+                SetAnchorDirOnly(draggedIdx, dir);
+                ResetExtendHandles(draggedIdx);
             }
+
+            // Sanity check — every anchor must be reachable (no orphans).
+            // Logging at edit-time so a future regression surfaces immediately.
+            int reachableCount = CountReachableFromAnchor0();
+            if (reachableCount != level.points.Count)
+                Debug.LogWarning($"[Dio Level Editor] Extend left {level.points.Count - reachableCount} orphan anchor(s). prevCount={oldCount} newCount={level.points.Count}");
             Save();
         }
 
-        // Move anchor[i] to a new direction, carrying both handles along
-        // with the same spherical rotation. FromToRotation maps oldDir →
-        // newDir along the shortest great-circle arc, preserving every
-        // angular distance to the anchor exactly — so handle "magnitudes"
-        // (their angular distance from the anchor) don't drift as the user
-        // sweeps the anchor across the sphere.
+        // Walk forward from anchor 0 and count distinct reachable anchors.
+        // Used for orphan detection after structural mutations.
+        int CountReachableFromAnchor0()
+        {
+            if (level == null || level.points.Count == 0) return 0;
+            var seen = new HashSet<int>();
+            var stack = new Stack<int>();
+            stack.Push(0);
+            while (stack.Count > 0)
+            {
+                int cur = stack.Pop();
+                if (!seen.Add(cur)) continue;
+                var nx = level.points[cur].next;
+                if (nx == null) continue;
+                for (int k = 0; k < nx.Count; k++) stack.Push(nx[k]);
+            }
+            return seen.Count;
+        }
+
         void MoveAnchorRigid(int i, Vector3 newDir)
         {
             var p = level.points[i];
             Vector3 oldDir = p.directionFromCenter.sqrMagnitude > 1e-6f
                 ? p.directionFromCenter.normalized : Vector3.up;
-            // If the move is microscopic, skip — FromToRotation can be
-            // unstable near identity / antipodal.
             if (Vector3.Dot(oldDir, newDir) > 0.99999f) { p.directionFromCenter = newDir; level.points[i] = p; return; }
             Quaternion q = Quaternion.FromToRotation(oldDir, newDir);
             p.directionFromCenter = newDir;
@@ -581,9 +809,6 @@ namespace Dio.Level.EditorTools
             level.points[i] = p;
         }
 
-        // After the new endpoint moves in shift-extend, set the two middle
-        // controls of the new segment to the geodesic midpoint, then enforce
-        // C1 at the previous-endpoint anchor (if it now has both handles).
         void ResetExtendHandles(int newIndex)
         {
             int prevIndex = (newIndex == 0) ? 1 : newIndex - 1;
@@ -593,8 +818,6 @@ namespace Dio.Level.EditorTools
 
             var prev = level.points[prevIndex];
             var nw   = level.points[newIndex];
-            // For an appended endpoint (newIndex > prevIndex): prev.outHandle = M,
-            // newAnchor.inHandle = M. Prepended is mirrored.
             if (newIndex > prevIndex)
             {
                 prev.outHandle = M;
@@ -608,10 +831,6 @@ namespace Dio.Level.EditorTools
             level.points[prevIndex] = prev;
             level.points[newIndex]  = nw;
 
-            // If the previous endpoint has BOTH handles now (i.e., it was
-            // already shared with another segment before the extension),
-            // reflect the OLDER side through the new tangent so the joint
-            // is C1.
             EnforceContinuity(prevIndex, preferReflectInFromOut: newIndex > prevIndex);
         }
 
@@ -623,19 +842,14 @@ namespace Dio.Level.EditorTools
             level.points[anchor] = p;
         }
 
-        // After dragging one handle, reflect the partner handle on the
-        // SAME anchor across the tangent plane so the bezier is C1 at
-        // that anchor. The partner's cached angular distance preserves
-        // its "magnitude"; only its tangent direction is flipped.
         void ReflectPartnerHandle(int anchor, DragKind draggedKind)
         {
             if (_partnerAnchorIdx != anchor) return;
             var p = level.points[anchor];
             Vector3 P = p.directionFromCenter.normalized;
             Vector3 dragged = (draggedKind == DragKind.InHandle ? p.inHandle : p.outHandle).normalized;
-            // Tangent at P toward dragged (project dragged onto tangent plane at P).
             Vector3 t = dragged - Vector3.Dot(dragged, P) * P;
-            if (t.sqrMagnitude < 1e-8f) return; // dragged collapsed onto P or its antipode.
+            if (t.sqrMagnitude < 1e-8f) return;
             t.Normalize();
             float ang = _partnerAngularDist;
             Vector3 partnerDir = Mathf.Cos(ang) * P + Mathf.Sin(ang) * (-t);
@@ -645,16 +859,12 @@ namespace Dio.Level.EditorTools
             level.points[anchor] = p;
         }
 
-        // Make in/out handles C1 at this anchor. `preferReflectInFromOut`:
-        // if true, take outHandle's tangent as authoritative and rebuild
-        // inHandle along -tangent at inHandle's preserved angular distance.
-        // If false, the reverse.
         void EnforceContinuity(int anchor, bool preferReflectInFromOut)
         {
             if (anchor < 0 || anchor >= level.points.Count) return;
             var p = level.points[anchor];
-            bool hasIn  = p.inHandle.sqrMagnitude  > 1e-6f && anchor > 0;
-            bool hasOut = p.outHandle.sqrMagnitude > 1e-6f && anchor < level.points.Count - 1;
+            bool hasIn  = p.inHandle.sqrMagnitude  > 1e-6f;
+            bool hasOut = p.outHandle.sqrMagnitude > 1e-6f;
             if (!hasIn || !hasOut) return;
 
             Vector3 P = p.directionFromCenter.normalized;
@@ -679,10 +889,6 @@ namespace Dio.Level.EditorTools
             level.points[anchor] = p;
         }
 
-        // Backfill handles on a level loaded from disk that pre-dates the
-        // bezier model — set every missing handle to the geodesic midpoint
-        // of its segment so the chain renders as a near-geodesic out of
-        // the box, then enforce C1 at every internal anchor.
         public static void EnsureDefaultHandles(LevelData lv)
         {
             if (lv == null || !lv.HasMinimum) return;
@@ -705,7 +911,6 @@ namespace Dio.Level.EditorTools
                 lv.points[i] = p;
             }
 
-            // C1 at each internal anchor — reflect inHandle from outHandle.
             for (int i = 1; i < lv.points.Count - 1; i++)
             {
                 var p = lv.points[i];
@@ -724,34 +929,40 @@ namespace Dio.Level.EditorTools
 
         // --- camera / picking math ---
 
-        bool RaycastSphere(Vector2 mouse, out Vector3 hit)
+        // Resolve a screen-space mouse position to a unit direction from the
+        // planet center — zoom-independent. We try the actual Globe mesh
+        // first (so dragging an anchor "lands" wherever the cursor is over
+        // the rendered terrain). If the cursor is in empty space outside the
+        // silhouette, fall back to "closest point on the camera ray to the
+        // origin" — the anchor still tracks the cursor's line of sight, just
+        // along the great-circle perpendicular to it. Either way we return a
+        // direction; height comes from the raycaster + yOffset elsewhere.
+        bool PickDirection(Vector2 mouse, out Vector3 unitDir)
         {
             Vector3 camPos = ComputeCameraPosition();
             Ray ray = ScreenPointToRay(mouse, camPos);
-            float r = level.planetRadius;
-            Vector3 oc = ray.origin;
-            float a = Vector3.Dot(ray.direction, ray.direction);
-            float b = 2f * Vector3.Dot(oc, ray.direction);
-            float c = Vector3.Dot(oc, oc) - r * r;
-            float disc = b * b - 4 * a * c;
-            if (disc < 0f) { hit = default; return false; }
-            float t = (-b - Mathf.Sqrt(disc)) / (2 * a); // near hit (camera-facing surface)
-            if (t < 0) t = (-b + Mathf.Sqrt(disc)) / (2 * a);
-            if (t < 0) { hit = default; return false; }
-            hit = ray.origin + ray.direction * t;
-            return true;
+
+            // Mesh first — this matches what the user sees on screen.
+            if (_raycaster != null && _raycaster.Raycast(ray, out Vector3 hit) && hit.sqrMagnitude > 1e-6f)
+            {
+                unitDir = hit.normalized;
+                return true;
+            }
+            // Empty-space fallback — the great-circle direction the ray comes
+            // closest to. Robust at any zoom level (sphere raycasts get jumpy
+            // when the camera is close to or inside the silhouette).
+            if (GlobeRaycaster.ClosestDirectionFromRay(ray, out unitDir))
+                return true;
+            unitDir = Vector3.up;
+            return false;
         }
 
         Vector3 ComputeCameraPosition()
         {
-            // Camera sits opposite to its forward direction at `_distance`
-            // from origin. `forward = orientation * +Z` per Unity convention.
             Vector3 forward = _orientation * Vector3.forward;
             return -forward * _distance;
         }
 
-        // Single source of truth for the editor camera basis — used by both
-        // PRU rendering and screen-space picking math, so they always agree.
         void ComputeCameraBasis(out Vector3 camPos, out Vector3 fwd, out Vector3 right, out Vector3 up)
         {
             fwd   = _orientation * Vector3.forward;
@@ -798,51 +1009,65 @@ namespace Dio.Level.EditorTools
         {
             _viewRect = rect;
 
-            // 1) 3D backdrop (world.fbx + a translucent planet sphere) via PRU.
+            // 1) 3D backdrop (Globe + cached track ribbon) via PRU.
             EnsurePreviewUtility();
+            EnsureSnapshots();
+            EnsurePreviewTrack();
             RenderBackdrop(rect);
 
             // 2) UI overlay — anchors / handles / beziers — drawn on top with
             // no depth test. Front-hemisphere only so back-side dots can't be
-            // accidentally clicked or visually clutter the view.
+            // accidentally clicked.
             Handles.BeginGUI();
 
             Vector3 camDir = ComputeCameraPosition().normalized;
 
-            // Beziers between consecutive anchors.
-            for (int i = 0; i < level.points.Count - 1; i++)
+            // Beziers between connected anchors. Each sample's height comes
+            // from the raycaster so the polyline snaps to the same surface
+            // the actual track mesh uses.
+            foreach (var (i, j) in level.EnumerateEdges())
             {
-                level.GetSegment(i, out Vector3 a, out Vector3 ah, out Vector3 bh, out Vector3 b);
+                level.GetEdge(i, j, out Vector3 a, out Vector3 ah, out Vector3 bh, out Vector3 b);
+                float yI = level.points[i].yOffset;
+                float yJ = level.points[j].yOffset;
                 var pts = new Vector3[BezierSegments + 1];
                 for (int s = 0; s <= BezierSegments; s++)
                 {
                     float t = (float)s / BezierSegments;
-                    pts[s] = GeodesicUtil.SphericalBezier(a, ah, bh, b, t) * level.planetRadius;
+                    Vector3 dir = GeodesicUtil.SphericalBezier(a, ah, bh, b, t);
+                    float surfaceR = _raycaster != null ? _raycaster.ResolveSurfaceRadius(dir) : level.NominalRadius;
+                    float y = Mathf.Lerp(yI, yJ, t);
+                    pts[s] = dir * (surfaceR + y);
                 }
                 DrawPolyline(pts, new Color(0.40f, 0.78f, 1.00f, 1f), 3f);
             }
 
-            // Handle leashes, anchors, handle dots — all front-hemisphere only.
+            // Handle leashes — a handle dot sits at its anchor's resolved
+            // height (so the leash visualises the tangent direction without
+            // also varying with the handle's own raycast result).
             for (int i = 0; i < level.points.Count; i++)
             {
                 var p = level.points[i];
                 Vector3 anchorDir = level.DirOf(i);
                 bool anchorVisible = Vector3.Dot(anchorDir, camDir) > 0f;
-                bool hasIn  = (i > 0) && p.inHandle.sqrMagnitude  > 1e-6f;
-                bool hasOut = (i < level.points.Count - 1) && p.outHandle.sqrMagnitude > 1e-6f;
+                bool hasIn  = p.inHandle.sqrMagnitude  > 1e-6f;
+                bool hasOut = p.outHandle.sqrMagnitude > 1e-6f;
+                float anchorH = level.ResolveHeight(i, _raycaster);
 
                 if (anchorVisible && hasIn  && Vector3.Dot(p.inHandle.normalized,  camDir) > 0f)
-                    DrawHandleLeash(anchorDir, p.inHandle.normalized);
+                    DrawHandleLeash(anchorDir, p.inHandle.normalized, anchorH);
                 if (anchorVisible && hasOut && Vector3.Dot(p.outHandle.normalized, camDir) > 0f)
-                    DrawHandleLeash(anchorDir, p.outHandle.normalized);
+                    DrawHandleLeash(anchorDir, p.outHandle.normalized, anchorH);
             }
 
-            // Anchors.
+            // Anchors — colour by role. Lifted to their resolved height so a
+            // yOffset>0 anchor renders visibly above the surface.
             for (int i = 0; i < level.points.Count; i++)
             {
                 Vector3 dir = level.DirOf(i);
                 if (Vector3.Dot(dir, camDir) <= 0f) continue;
-                Vector3 wp = dir * level.planetRadius;
+                float anchorH = level.ResolveHeight(i, _raycaster);
+                Vector3 wp = dir * anchorH;
                 if (!TryWorldToScreen(wp, out Vector2 sp)) continue;
                 Color col = i == 0 ? new Color(1f, 0.30f, 0.30f, 1f)
                           : i == level.points.Count - 1 ? new Color(0.36f, 0.92f, 0.42f, 1f)
@@ -851,42 +1076,68 @@ namespace Dio.Level.EditorTools
                 GUI.Label(new Rect(sp.x + 14, sp.y - 24, 80, 18), i.ToString(), EditorStyles.whiteMiniLabel);
             }
 
-            // Handle dots on top.
+            // Handle dots — at the anchor's resolved height (NOT the handle's
+            // own raycast). This matches the user's spec: control points
+            // share the anchor's y, so they don't drift when the anchor's
+            // yOffset changes.
             for (int i = 0; i < level.points.Count; i++)
             {
                 var p = level.points[i];
-                bool hasIn  = (i > 0) && p.inHandle.sqrMagnitude  > 1e-6f;
-                bool hasOut = (i < level.points.Count - 1) && p.outHandle.sqrMagnitude > 1e-6f;
+                bool hasIn  = p.inHandle.sqrMagnitude  > 1e-6f;
+                bool hasOut = p.outHandle.sqrMagnitude > 1e-6f;
+                float anchorH = level.ResolveHeight(i, _raycaster);
                 if (hasIn && Vector3.Dot(p.inHandle.normalized, camDir) > 0f
-                    && TryWorldToScreen(p.inHandle.normalized * level.planetRadius, out Vector2 sIn))
+                    && TryWorldToScreen(p.inHandle.normalized * anchorH, out Vector2 sIn))
                     DrawDot(sIn, HandleDotRadius, new Color(1f, 0.85f, 0.30f, 1f));
                 if (hasOut && Vector3.Dot(p.outHandle.normalized, camDir) > 0f
-                    && TryWorldToScreen(p.outHandle.normalized * level.planetRadius, out Vector2 sOut))
+                    && TryWorldToScreen(p.outHandle.normalized * anchorH, out Vector2 sOut))
                     DrawDot(sOut, HandleDotRadius, new Color(1f, 0.55f, 0.85f, 1f));
+            }
+
+            // yOffset arrows: gated solely on the live shift modifier. The
+            // `wantsMouseEnterLeaveWindow` + KeyDown/KeyUp Repaint hook
+            // upstream ensures this flips on/off the moment the user hits
+            // shift, with no stale frames in between.
+            if (Event.current.shift)
+            {
+                for (int i = 0; i < level.points.Count; i++)
+                {
+                    Vector3 dir = level.DirOf(i);
+                    if (Vector3.Dot(dir, camDir) <= 0f) continue;
+                    float surfaceR = _raycaster != null ? _raycaster.ResolveSurfaceRadius(dir) : level.NominalRadius;
+                    Vector3 basePos = dir * surfaceR;
+                    Vector3 liftedPos = basePos + dir * level.points[i].yOffset;
+                    if (!TryWorldToScreen(liftedPos, out Vector2 sp)) continue;
+                    Vector2 screenUp;
+                    {
+                        Vector3 wpNext = liftedPos + dir * (level.NominalRadius * 0.08f);
+                        if (TryWorldToScreen(wpNext, out Vector2 spNext))
+                            screenUp = (spNext - sp).normalized;
+                        else
+                            screenUp = Vector2.up;
+                    }
+                    float arrowLen = 28f;
+                    Vector2 tip = sp + screenUp * arrowLen;
+                    Handles.color = Color.yellow;
+                    Handles.DrawAAPolyLine(2.5f, new Vector3[] { new Vector3(sp.x, sp.y, 0), new Vector3(tip.x, tip.y, 0) });
+                    Vector2 perp = new Vector2(-screenUp.y, screenUp.x);
+                    Handles.DrawAAPolyLine(2.5f, new Vector3[] {
+                        new Vector3(tip.x, tip.y, 0),
+                        new Vector3(tip.x - screenUp.x * 8f + perp.x * 5f, tip.y - screenUp.y * 8f + perp.y * 5f, 0),
+                        new Vector3(tip.x, tip.y, 0),
+                        new Vector3(tip.x - screenUp.x * 8f - perp.x * 5f, tip.y - screenUp.y * 8f - perp.y * 5f, 0)
+                    });
+                    GUI.Label(new Rect(tip.x + 4, tip.y - 10, 60, 16), $"+{level.points[i].yOffset:F1}", EditorStyles.whiteMiniLabel);
+                }
             }
 
             Handles.EndGUI();
         }
 
-        // Render the 3D backdrop. Skipped during Layout events (zero-size
-        // rects until first Repaint cause RenderTexture.Create to fail) and
-        // any time the rect collapses (window minimised, between docks).
         void RenderBackdrop(Rect rect)
         {
             if (Event.current.type != EventType.Repaint) return;
             if (rect.width < 4f || rect.height < 4f) return;
-
-            EnsureBackdropAssets();
-            // First time we have a mesh + a level, snap the multiplier so
-            // the FBX actually appears at the planet's scale instead of as
-            // a tiny dot at the origin (default multiplier = 1, mesh ≈ 1u,
-            // planet = 200u → mesh is 200× smaller than the sphere).
-            if (worldMeshAsset != null && level != null
-                && Mathf.Approximately(worldMeshRadiusMultiplier, 1f))
-            {
-                AutoFitWorldMesh();
-            }
-            EnsureWorldDrawList();
 
             _pru.BeginPreview(rect, GUIStyle.none);
 
@@ -894,29 +1145,44 @@ namespace Dio.Level.EditorTools
             _pru.camera.transform.position = camPos;
             _pru.camera.transform.rotation = Quaternion.LookRotation(fwd, up);
             _pru.camera.fieldOfView = 60f;
-            _pru.camera.nearClipPlane = Mathf.Max(0.1f, level.planetRadius * 0.01f);
-            _pru.camera.farClipPlane = level.planetRadius * 25f;
+            _pru.camera.nearClipPlane = Mathf.Max(0.1f, level.NominalRadius * 0.01f);
+            _pru.camera.farClipPlane = level.NominalRadius * 25f;
 
-            // Translucent planet sphere — orientation reference. Drawn first
-            // so the world.fbx renders ON TOP (matches what cars actually see).
-            if (_planetMesh != null && _planetMat != null)
+            // Globe — rendered with its own materials. PreviewRenderUtility
+            // can't reliably bind URP shaders, so designers should keep the
+            // FBX submeshes on built-in (Standard / Unlit) materials. The
+            // submesh material is used as-is; if it's missing we throw so
+            // the user sees the asset is broken instead of a silent fail.
+            for (int i = 0; i < _snapshots.Count; i++)
             {
-                _pru.DrawMesh(_planetMesh, Matrix4x4.Scale(Vector3.one * level.planetRadius), _planetMat, 0);
+                var s = _snapshots[i];
+                if (s.mesh == null) continue;
+                int subCount = s.mesh.subMeshCount;
+                if (s.materials == null || s.materials.Length == 0)
+                    throw new System.Exception(
+                        $"[Dio Level Editor] Globe submesh {i} has no materials. " +
+                        "Ensure the FBX has valid materials assigned.");
+                for (int sm = 0; sm < subCount; sm++)
+                {
+                    Material mat = s.materials[Mathf.Min(sm, s.materials.Length - 1)];
+                    if (mat == null)
+                        throw new System.Exception(
+                            $"[Dio Level Editor] Globe submesh {i}, slot {sm} has null material.");
+                    _pru.DrawMesh(s.mesh, s.worldMatrix, mat, sm);
+                }
             }
 
-            if (showWorldMesh)
+            // Track ribbon preview — actual TrackBuilder mesh, low-res, no
+            // guards / collider. So the editor view matches what cars will
+            // drive on instead of an idealised polyline.
+            if (_previewTrackMesh != null && _previewTrackMat != null)
+                _pru.DrawMesh(_previewTrackMesh, Matrix4x4.identity, _previewTrackMat, 0);
+
+            // Outer skirts — render below the ribbon so elevation reads.
+            if (_previewGuardMat != null)
             {
-                // Force the fallback (Unlit/Color, vibrant green so it
-                // pops against the dark planet) for every sub-mesh. The
-                // FBX's own URP/Lit materials don't always render through
-                // PreviewRenderUtility's camera path under URP — using one
-                // pipeline-agnostic unlit material guarantees the mesh
-                // shows up.
-                for (int i = 0; i < _worldDrawList.Count; i++)
-                {
-                    var entry = _worldDrawList[i];
-                    _pru.DrawMesh(entry.mesh, entry.matrix, _fallbackMat, 0);
-                }
+                if (_previewGuardLeft  != null) _pru.DrawMesh(_previewGuardLeft,  Matrix4x4.identity, _previewGuardMat, 0);
+                if (_previewGuardRight != null) _pru.DrawMesh(_previewGuardRight, Matrix4x4.identity, _previewGuardMat, 0);
             }
 
             _pru.camera.Render();
@@ -924,79 +1190,14 @@ namespace Dio.Level.EditorTools
             GUI.DrawTexture(rect, tex, ScaleMode.StretchToFill, false);
         }
 
-        void EnsureBackdropAssets()
-        {
-            if (_fallbackMat == null)
-            {
-                // URP/Unlit first since the project is URP (the planet
-                // sphere uses it and renders fine through PRU). Fall back
-                // to built-in Unlit/Color for non-URP setups. We avoid
-                // anything *Lit because PRU's camera isn't always picked
-                // up by URP's frame setup, leaving lit materials invisible.
-                Shader sh = Shader.Find("Universal Render Pipeline/Unlit") ?? Shader.Find("Unlit/Color") ?? Shader.Find("Standard");
-                _fallbackMat = new Material(sh) { hideFlags = HideFlags.HideAndDontSave };
-                _fallbackMat.color = new Color(0.55f, 0.78f, 0.55f, 1f);
-            }
-            if (_planetMesh == null)
-            {
-                _planetMesh = HighResIcoSphere.Build(subdivisions: 3);
-                _planetMesh.hideFlags = HideFlags.HideAndDontSave;
-            }
-            if (_planetMat == null)
-            {
-                Shader sh = Shader.Find("Unlit/Color") ?? Shader.Find("Universal Render Pipeline/Unlit");
-                _planetMat = new Material(sh) { hideFlags = HideFlags.HideAndDontSave };
-                _planetMat.color = new Color(0.18f, 0.20f, 0.30f, 1f);
-            }
-        }
-
-        // Flatten the FBX hierarchy into a list of (mesh, world matrix,
-        // shared materials) entries. World matrix = scale * localToRoot, so a
-        // 1×1×1 unit mesh ends up at planetRadius after auto-fit.
-        void EnsureWorldDrawList()
-        {
-            if (_cachedWorldRoot == worldMeshAsset
-                && Mathf.Approximately(_cachedWorldMultiplier, worldMeshRadiusMultiplier)
-                && _worldDrawList.Count > 0)
-                return;
-
-            _worldDrawList.Clear();
-            _cachedWorldRoot = worldMeshAsset;
-            _cachedWorldMultiplier = worldMeshRadiusMultiplier;
-            if (worldMeshAsset == null) return;
-
-            Matrix4x4 globalScale = Matrix4x4.Scale(Vector3.one * worldMeshRadiusMultiplier);
-            var filters = worldMeshAsset.GetComponentsInChildren<MeshFilter>(true);
-            foreach (var mf in filters)
-            {
-                if (mf.sharedMesh == null) continue;
-                Matrix4x4 local = WorldMeshLocalToRoot(mf.transform);
-                var rend = mf.GetComponent<MeshRenderer>();
-                _worldDrawList.Add(new DrawEntry
-                {
-                    mesh = mf.sharedMesh,
-                    matrix = globalScale * local,
-                    materials = rend != null ? rend.sharedMaterials : null,
-                });
-            }
-            // One-shot diagnostic so the user (and future-me) can see what
-            // got picked up. Helps debug "I selected the FBX but nothing
-            // shows up": is it 0 meshes? Is the multiplier ridiculous? etc.
-            Bounds b = ComputeWorldMeshBounds();
-            Debug.Log($"[Dio Level Editor] world.fbx draw-list rebuilt: {_worldDrawList.Count} sub-meshes, " +
-                      $"local bounds size={b.size} (max axis={Mathf.Max(b.extents.x, Mathf.Max(b.extents.y, b.extents.z)):F3}u), " +
-                      $"multiplier={worldMeshRadiusMultiplier:F2} → world size≈{b.size.magnitude * worldMeshRadiusMultiplier:F1}u, " +
-                      $"planet radius={(level != null ? level.planetRadius : 0f):F1}u");
-        }
-
-        void DrawHandleLeash(Vector3 anchorDir, Vector3 handleDir)
+        void DrawHandleLeash(Vector3 anchorDir, Vector3 handleDir, float anchorHeight)
         {
             const int N = 6;
             var pts = new Vector3[N + 1];
             for (int s = 0; s <= N; s++)
             {
                 float t = (float)s / N;
-                pts[s] = Vector3.Slerp(anchorDir, handleDir, t).normalized * level.planetRadius;
+                pts[s] = Vector3.Slerp(anchorDir, handleDir, t).normalized * anchorHeight;
             }
             DrawPolyline(pts, new Color(1f, 0.92f, 0.55f, 0.75f), 1.6f);
         }

@@ -102,6 +102,7 @@ namespace Dio.UI
             // GO! — restore camera lerp + unlock cars + hold the text.
             if (rc != null) rc.chasePosLerp = runChaseLerp;
             SetAllCarInputsLocked(false);
+            DioNetworkManager.OnCountdownEnd?.Invoke();
             yield return TickPop("GO!", durationSeconds: goHoldSeconds, isGo: true);
 
             HideCountdown();

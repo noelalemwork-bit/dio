@@ -22,6 +22,9 @@ namespace Dio.Net
         [Tooltip("Networked car prefab. Spawned per-connection on race start.")]
         public GameObject carPrefab;
 
+        [Tooltip("Car prefabs to choose from randomly on race start. Each must be built from a VehicleProfile using CarPrefabBuilder.")]
+        public GameObject[] carPrefabs;
+
         [Tooltip("Fallback level if no level is selected (no players have voted, no host pick yet).")]
         public Dio.Level.LevelData defaultLevel;
 
@@ -65,6 +68,7 @@ namespace Dio.Net
         // Bool argument: true if this peer is the server (host or dedicated).
         public static System.Action<bool, RaceStartMessage> OnRaceStarted;
         public static System.Action<RaceWonMessage> OnRaceWon;
+        public static System.Action OnCountdownEnd;
 
         bool _raceActive;
         // Crossed the finish when within `FinishArcWindow` meters of the END
@@ -118,6 +122,15 @@ namespace Dio.Net
         {
             if (carPrefab != null && !NetworkClient.prefabs.ContainsValue(carPrefab))
                 NetworkClient.RegisterPrefab(carPrefab);
+
+            if (carPrefabs != null)
+            {
+                foreach (var p in carPrefabs)
+                {
+                    if (p != null && !NetworkClient.prefabs.ContainsValue(p))
+                        NetworkClient.RegisterPrefab(p);
+                }
+            }
 
             var bootstrap = FindAnyObjectByType<Dio.Powerups.PowerupBootstrap>();
             if (bootstrap != null)
@@ -177,8 +190,17 @@ namespace Dio.Net
                 return;
             }
 
-            // Embed the selected level's GUID in the start message so clients
-            // can pick the matching asset from their catalog.
+            // Embed the selected level's catalog index (canonical) + GUID
+            // (debug-only) in the start message so clients can pick the
+            // matching asset from their catalog. The catalog itself is
+            // serialised on every clone via the DioNetworkManager prefab
+            // built by `Tools → Dio → Build → Network Manager Prefab`.
+            int lvlIndex = -1;
+            if (levelCatalog != null)
+            {
+                for (int i = 0; i < levelCatalog.Length; i++)
+                    if (levelCatalog[i] == _activeLevel) { lvlIndex = i; break; }
+            }
             string lvlGuid = string.Empty;
 #if UNITY_EDITOR
             string p2p = UnityEditor.AssetDatabase.GetAssetPath(_activeLevel);
@@ -188,12 +210,15 @@ namespace Dio.Net
             var msg = new RaceStartMessage
             {
                 levelGuid = lvlGuid,
+                levelCatalogIndex = lvlIndex,
                 seed = Random.Range(int.MinValue, int.MaxValue),
                 // Long delay so the cinematic intro gets time to swoop the
                 // camera in + run the 3-2-1-GO! countdown. RaceIntro on each
                 // peer locks inputs locally until startServerTime.
                 startServerTime = NetworkTime.time + 4.0,
             };
+
+            Debug.Log($"[Dio] ServerStartRace level='{_activeLevel.name}' catalogIndex={lvlIndex} guid={lvlGuid}");
 
             // Build the server-side planet FIRST so newly-spawned cars can find it
             // in their Awake. Otherwise SphericalGravity has nothing to fall back to.
@@ -229,7 +254,7 @@ namespace Dio.Net
         [Server]
         void ServerSpawnCarsForAllPlayers()
         {
-            if (carPrefab == null) { Debug.LogError("[Dio] carPrefab is null on DioNetworkManager."); return; }
+            if (carPrefab == null && (carPrefabs == null || carPrefabs.Length == 0)) { Debug.LogError("[Dio] carPrefab and carPrefabs are null/empty on DioNetworkManager."); return; }
             var lvl = ActiveLevel;
             if (lvl == null || !lvl.HasMinimum)
             {
@@ -238,19 +263,29 @@ namespace Dio.Net
             }
 
             int total = _players.Count;
+            var raycaster = Dio.Level.RaceBootstrap.CurrentRaycaster;
+            int finishIdx = lvl.points.Count - 1;
+            int initialRemaining = Mathf.Max(0, Dio.Level.LevelGraph.MinHopsBetween(lvl, 0, finishIdx));
             int i = 0;
             foreach (var kv in _players)
             {
                 var conn = NetworkServer.connections.TryGetValue(kv.Key, out var c) ? c : null;
                 var player = kv.Value;
-                Vector3 pos; Quaternion rot;
-                ComputeStartTransform(lvl, i, total, out pos, out rot);
+                ComputeStartTransform(lvl, raycaster, i, total, out Vector3 pos, out Quaternion rot);
+                Debug.Log($"[Dio] Spawning car slot={i}/{total} pos={pos} fwd={rot * Vector3.forward} up={rot * Vector3.up}");
 
-                var carGo = Instantiate(carPrefab, pos, rot);
+                var prefab = carPrefabs != null && carPrefabs.Length > 0 ? carPrefabs[Random.Range(0, carPrefabs.Length)] : carPrefab;
+                var carGo = Instantiate(prefab, pos, rot);
                 NetworkServer.Spawn(carGo, conn);
 
                 var car = carGo.GetComponent<DioCar>();
                 if (car != null && player != null) car.ServerInitialize(player);
+                if (car != null)
+                {
+                    car.ServerResetCheckpoints();
+                    car.ServerCheckpointHit(0); // crossing the start anchor (x=1 at lights-out)
+                    car.checkpointsToFinishY = car.CrossedCount + initialRemaining;
+                }
                 i++;
             }
 
@@ -258,15 +293,34 @@ namespace Dio.Net
             // testing without the lobby).
             if (_players.Count == 0 && soloBypass)
             {
-                ComputeStartTransform(lvl, 0, 1, out var pos, out var rot);
-                var carGo = Instantiate(carPrefab, pos, rot);
+                ComputeStartTransform(lvl, raycaster, 0, 1, out var pos, out var rot);
+                Debug.Log($"[Dio] Solo-bypass spawn pos={pos} fwd={rot * Vector3.forward} up={rot * Vector3.up}");
+                var prefab = carPrefabs != null && carPrefabs.Length > 0 ? carPrefabs[Random.Range(0, carPrefabs.Length)] : carPrefab;
+                var carGo = Instantiate(prefab, pos, rot);
                 NetworkServer.Spawn(carGo);
+                var soloCar = carGo.GetComponent<DioCar>();
+                if (soloCar != null)
+                {
+                    soloCar.ServerResetCheckpoints();
+                    soloCar.ServerCheckpointHit(0);
+                    soloCar.checkpointsToFinishY = soloCar.CrossedCount + initialRemaining;
+                }
             }
         }
 
-        // Drops 5 mystery boxes in a row across the track at the geodesic
-        // midpoint. Each box is locked to a unique PowerupKind via SyncVar so
-        // every client sees the same payload distribution.
+        // For every edge in the track graph, drop one row of 5 mystery boxes
+        // across the track at that edge's local midpoint. Each row uses a
+        // unique groupId so a player can grab one box per row per pass —
+        // PowerupHolder.consumedGroups tracks which rows the player has
+        // already used.
+        //
+        // Edge enumeration walks the level's adjacency graph, so:
+        //   * 1 anchor pair (default level) → 1 row of 5 boxes
+        //   * 3 anchors / 2 edges → 2 rows
+        //   * a fork from an interior anchor → +1 row per new outgoing edge
+        // The midpoint is sampled at the EDGE's local t=0.5 (not the chain's
+        // overall t=0.5) so a fork's branch row sits at the middle of the
+        // forked bezier, not collapsed onto the trunk.
         [Server]
         void ServerSpawnMidTrackPowerups()
         {
@@ -278,8 +332,37 @@ namespace Dio.Net
                 Debug.LogWarning("[Dio] No PowerupBootstrap or powerupBoxPrefab — skipping mid-track row.");
                 return;
             }
+            lvl.EnsureLinearChainNext();
 
-            // Pool of distinct kinds the mid-track row can dispense.
+            var raycaster = Dio.Level.RaceBootstrap.CurrentRaycaster;
+
+            // groupId starts at 1 and increments per row; a player who passes
+            // through every row in a lap can collect one box from each — same
+            // semantics as the original single-row behaviour, just multiplied.
+            int nextGroupId = 1;
+            int totalRows = 0;
+            int totalBoxes = 0;
+            foreach (var (from, to) in lvl.EnumerateEdges())
+            {
+                int spawned = SpawnMidTrackRowForEdge(lvl, raycaster, pu, from, to, nextGroupId);
+                if (spawned > 0)
+                {
+                    nextGroupId++;
+                    totalRows++;
+                    totalBoxes += spawned;
+                }
+            }
+            Debug.Log($"[Dio] Mid-track powerups: {totalRows} rows × {totalBoxes / Mathf.Max(1, totalRows)} boxes (= {totalBoxes} total).");
+        }
+
+        // Spawn one row of 5 boxes at the midpoint of the (from → to) bezier
+        // edge. Returns the number of boxes spawned (0 on fail).
+        [Server]
+        int SpawnMidTrackRowForEdge(Dio.Level.LevelData lvl, Dio.Level.GlobeRaycaster raycaster,
+            Dio.Powerups.PowerupBootstrap pu, int from, int to, int groupId)
+        {
+            // Independently shuffled pool per row — every row gets a fresh
+            // 5-of-9 pick so the player's choice differs at each midpoint.
             var pool = new System.Collections.Generic.List<Dio.Powerups.PowerupKind>
             {
                 Dio.Powerups.PowerupKind.Boost,
@@ -292,7 +375,6 @@ namespace Dio.Net
                 Dio.Powerups.PowerupKind.Bobomb,
                 Dio.Powerups.PowerupKind.Tornado,
             };
-
             const int rowSize = 5;
             var picked = new System.Collections.Generic.List<Dio.Powerups.PowerupKind>(rowSize);
             for (int i = 0; i < rowSize && pool.Count > 0; i++)
@@ -302,57 +384,82 @@ namespace Dio.Net
                 pool.RemoveAt(idx);
             }
 
-            // Build the local Frenet frame at the geodesic midpoint and lay
-            // the row out evenly across the track width.
-            Vector3 mid = Dio.Level.TrackBuilder.SampleAt(lvl, 0.5f);
-            Vector3 midDir = mid.normalized;
-            Vector3 tangent = Dio.Level.TrackBuilder.TangentAt(lvl, 0.5f);
-            Vector3 right = Vector3.Cross(tangent, midDir).normalized;
+            // Sample the edge's bezier at t=0.5 — this is the EDGE's local
+            // midpoint, not the chain's overall midpoint. For forks, this
+            // means each outgoing branch gets its own row at the middle of
+            // its own curve.
+            lvl.GetEdge(from, to, out Vector3 a, out Vector3 ah, out Vector3 bh, out Vector3 b);
+            const float MidT = 0.5f;
+            const float DerivEps = 0.001f;
+            Vector3 midDir   = Dio.Level.GeodesicUtil.SphericalBezier(a, ah, bh, b, MidT);
+            Vector3 dirAhead = Dio.Level.GeodesicUtil.SphericalBezier(a, ah, bh, b, MidT + DerivEps);
+            Vector3 tangent  = (dirAhead - midDir).normalized;
+            if (tangent.sqrMagnitude < 1e-6f) tangent = Dio.Level.GeodesicUtil.TangentAt(a, b);
 
-            float trackW = lvl.trackWidth;
+            float yOffset  = Mathf.Lerp(lvl.points[from].yOffset, lvl.points[to].yOffset, MidT);
+            float surfaceR = raycaster != null ? raycaster.ResolveSurfaceRadius(midDir) : lvl.NominalRadius;
+            // Lift boxes a metre above the surface so the chassis pivot can
+            // pass under them but the bounds intersect a normal car.
+            const float Lift = 1.0f;
+            Vector3 mid = midDir * (surfaceR + yOffset + Lift);
+
+            // Right vector in the local tangent plane: up × forward.
+            Vector3 right = Vector3.Cross(midDir, tangent).normalized;
+
+            float trackW = lvl.EffectiveTrackWidth;
             float spacing = trackW / (picked.Count + 1f);
-
-            // All boxes in this row share the same group id, so a player can
-            // only grab one of them per pass (PowerupHolder tracks consumed groups).
-            const int midRowGroupId = 1;
 
             for (int i = 0; i < picked.Count; i++)
             {
                 float lateral = -trackW * 0.5f + spacing * (i + 1);
-                Vector3 boxPos = mid + midDir * 1.0f + right * lateral;
+                Vector3 boxPos = mid + right * lateral;
                 var go = Instantiate(pu.powerupBoxPrefab, boxPos,
                     Quaternion.LookRotation(tangent, midDir));
                 var box = go.GetComponent<Dio.Powerups.PowerupBox>();
                 if (box != null)
                 {
                     box.forceKind = picked[i];
-                    box.groupId = midRowGroupId;
+                    box.groupId = groupId;
                 }
                 NetworkServer.Spawn(go);
             }
 
-            Debug.Log($"[Dio] Mid-track row spawned: {string.Join(", ", picked)}");
+            Debug.Log($"[Dio] Powerup row #{groupId} on edge {from}->{to}: {string.Join(", ", picked)}");
+            return picked.Count;
         }
 
-        // Up to 3 cars per row, additional rows fold backward along the tangent.
-        // Within each row the cars are centered around the track midline so a
-        // partial last row (e.g. 2 cars in a 5-player race) still looks symmetric.
-        // Chassis pivot lands exactly on the surface — wheels touch ground
-        // immediately because the prefab's WheelCollider Y is wheelRadius +
-        // suspensionDistance × suspensionTargetPos.
-        static void ComputeStartTransform(Dio.Level.LevelData level, int slot, int totalPlayers,
+        // Per-car start transform. Up to 3 cars per row, additional rows fold
+        // BACKWARD along the geodesic (not the tangent — tangent stepping
+        // curves below the surface as the offset grows). Within each row the
+        // cars are centered around the track midline so a partial last row
+        // (e.g. 2 cars in a 5-player race) still looks symmetric.
+        //
+        // Critical math:
+        //   * Backward step is a great-circle rotation of the start anchor's
+        //     direction around the axis perpendicular to (startDir, startTan).
+        //     SAME axis the spawn-pad ribbon uses, so cars sit ON the pad.
+        //   * Radial height comes from the raycaster (when available) so the
+        //     chassis pivot lands on the actual mesh surface, not the
+        //     idealised sphere — without this, cars on uneven terrain clip
+        //     through the ground at race start. We add startYOffset on top
+        //     so a designer-lifted start line still works, and a tiny
+        //     clearance so wheels settle on the first frame.
+        //   * Lateral offset uses EffectiveTrackWidth (= trackWidth *
+        //     trackRatio) and is applied in the LOCAL tangent plane at the
+        //     row's position — Cross(rowDir, rowTan) is the local "right".
+        //   * Rotation: Quaternion.LookRotation(forward=rowTan, up=rowDir).
+        //     Car's +Z = forward along track, +Y = surface up. Standard
+        //     Unity convention; matches the car prefab's mesh orientation.
+        static void ComputeStartTransform(Dio.Level.LevelData level, Dio.Level.GlobeRaycaster raycaster,
+                                          int slot, int totalPlayers,
                                           out Vector3 pos, out Quaternion rot)
         {
             const int perRow = 3;
             const float forwardSpacing = 4.5f;
 
-            Vector3 startDir = level.points[0].directionFromCenter.normalized;
-            // Use the bezier's tangent at t=0 of the first segment, not the
-            // raw geodesic tangent — they agree only when the start handle
-            // points along the geodesic, which is no longer the default
-            // once the level editor authors curved sections.
-            Vector3 tangent  = Dio.Level.TrackBuilder.TangentAt(level, 0f);
-            Vector3 right    = Vector3.Cross(startDir, tangent).normalized;
+            Vector3 startDir = level.DirOf(0);
+            Vector3 startTan = Dio.Level.TrackBuilder.TangentAt(level, 0f);
+            float startYOffset = level.points[0].yOffset;
 
             int row = slot / perRow;
             int colInRow = slot - row * perRow;
@@ -362,17 +469,50 @@ namespace Dio.Net
 
             // rowCount=3 → cols are -1, 0, +1; rowCount=2 → -0.5, +0.5; rowCount=1 → 0.
             float colOffset = colInRow - (rowCount - 1) * 0.5f;
-            float lateralSpacing = level.trackWidth * 0.25f;
+            float lateralSpacing = level.EffectiveTrackWidth * 0.25f;
             float lateral = colOffset * lateralSpacing;
 
-            // Rows behind the start line walk backward along the tangent.
-            float backward = -row * forwardSpacing;
+            // Geodesic backward step using the same axis the spawn pad
+            // arc uses — so each row's car sits ON the pad's geometry.
+            // axis = startDir × (-startTan), positive angle rotates startDir
+            // in the -tangent direction.
+            float radius = level.NominalRadius;
+            float backwardArc = row * forwardSpacing;
+            float backwardAngle = backwardArc / Mathf.Max(0.01f, radius);
 
-            // Tiny radial clearance so the wheels settle on first frame instead of
-            // embedding into the planet collider.
-            Vector3 surface = startDir * level.planetRadius + startDir * 0.05f;
-            pos = surface + right * lateral + tangent * backward;
-            rot = Quaternion.LookRotation(tangent, startDir);
+            Vector3 axis = Vector3.Cross(startDir, -startTan);
+            Vector3 rowDir, rowTan;
+            if (axis.sqrMagnitude < 1e-8f)
+            {
+                // Degenerate (start tangent is parallel to start direction —
+                // shouldn't ever happen for a valid level). Fall back to no
+                // rotation so we still produce a sensible spawn.
+                rowDir = startDir;
+                rowTan = startTan;
+            }
+            else
+            {
+                axis.Normalize();
+                Quaternion q = Quaternion.AngleAxis(backwardAngle * Mathf.Rad2Deg, axis);
+                rowDir = (q * startDir).normalized;
+                rowTan = (q * startTan).normalized;
+            }
+
+            // Resolve actual surface height at the row's position. Falling
+            // back to NominalRadius if no raycaster (server-headless mode
+            // without a spawned planet — rare but possible).
+            float surfaceR = raycaster != null ? raycaster.ResolveSurfaceRadius(rowDir) : radius;
+            float radialHeight = surfaceR + startYOffset + 0.10f; // 10cm clearance
+
+            // Right vector in the local tangent plane: up × forward
+            // (Unity left-handed). Lateral offset slides the car sideways
+            // across the track without leaving the surface plane.
+            Vector3 rowRight = Vector3.Cross(rowDir, rowTan).normalized;
+            pos = rowDir * radialHeight + rowRight * lateral;
+
+            // LookRotation(forward, up). With forward = rowTan (along track)
+            // and up = rowDir (radial), the car's +Z faces the finish line.
+            rot = Quaternion.LookRotation(rowTan, rowDir);
         }
 
         void OnClientRaceStart(RaceStartMessage msg)
@@ -401,6 +541,17 @@ namespace Dio.Net
         public override void Update()
         {
             base.Update();
+
+            // Host-only restart hotkey (R). Tears down per-race networked
+            // state and reuses the SAME level for an immediate rematch — no
+            // win popup, no lobby roundtrip. Pure clients and dedicated
+            // servers ignore (they have no input or shouldn't decide).
+            if (NetworkServer.active && NetworkClient.active && Input.GetKeyDown(KeyCode.R))
+            {
+                ServerRestartRace();
+                return;
+            }
+
             if (!NetworkServer.active || !_raceActive) return;
             var lvl = ActiveLevel;
             if (lvl == null || !lvl.HasMinimum) return;
@@ -415,21 +566,25 @@ namespace Dio.Net
                 var car = ni != null ? ni.GetComponent<DioCar>() : null;
                 if (car == null) continue;
 
+                // Update progressArc for legacy systems (minimap, projectile
+                // leader pick) that still rank by arc length. Win detection
+                // moved to CheckpointTrigger / ServerNotifyCarFinished.
                 float arc = Dio.Level.TrackBuilder.ArcLengthOf(lvl, car.transform.position, planetCenter);
-                // Publish so HUDs / minimap markers can show race position.
                 car.progressArc = arc;
-
-                if (arc < finishArc - FinishArcWindow) continue;
-
-                // Crossed the finish — winner is the connection that owns this car.
-                DioPlayer winnerPlayer = null;
-                if (car.connectionToClient != null
-                    && _players.TryGetValue(car.connectionToClient.connectionId, out var p))
-                    winnerPlayer = p;
-
-                ServerEndRace(winnerPlayer, car);
-                return;
             }
+        }
+
+        /// Called by CheckpointTrigger when a car enters the finish anchor's
+        /// trigger volume. Server-only.
+        [Server]
+        public void ServerNotifyCarFinished(DioCar car)
+        {
+            if (!_raceActive || car == null) return;
+            DioPlayer winnerPlayer = null;
+            if (car.connectionToClient != null
+                && _players.TryGetValue(car.connectionToClient.connectionId, out var p))
+                winnerPlayer = p;
+            ServerEndRace(winnerPlayer, car);
         }
 
         [Server]
@@ -460,6 +615,56 @@ namespace Dio.Net
 
             Invoke(nameof(ServerCleanupRace), DefaultCleanupDelaySec);
             Debug.Log($"[Dio] Server declared winner '{name}'. Cleanup in {DefaultCleanupDelaySec}s.");
+        }
+
+        /// Host-pressed-R restart. Tears down per-race networked state with
+        /// the `isRestart` flag (clients suppress the win UI), then schedules
+        /// a fresh ServerStartRace on the SAME level after a short delay so
+        /// destroyed networked objects fully propagate to clients first.
+        [Server]
+        public void ServerRestartRace()
+        {
+            Debug.Log("[Dio] ServerRestartRace — host requested rematch on the same level.");
+            CancelInvoke(nameof(ServerCleanupRace));
+            CancelInvoke(nameof(ServerStartRaceFromRestart));
+
+            _raceActive = false;
+            // Lock all car inputs immediately so no commands queue up while
+            // we're tearing down.
+            foreach (var ni in NetworkServer.spawned.Values)
+            {
+                var ac = ni != null ? ni.GetComponent<Dio.Player.ArcadeCarController>() : null;
+                if (ac != null) ac.inputsLocked = true;
+            }
+
+            const float restartCleanupDelay = 0.5f;
+            var rmsg = new RaceWonMessage
+            {
+                winnerName = string.Empty,
+                winnerColorIndex = 0,
+                cleanupDelay = restartCleanupDelay,
+                isRestart = true,
+            };
+            NetworkServer.SendToAll(rmsg);
+            if (!NetworkClient.active) OnRaceWon?.Invoke(rmsg);
+
+            // Cleanup networked race objects on the server. Clients tear down
+            // their visual scene via the RaceWonMessage handler.
+            ServerCleanupRace();
+            // Schedule the new race start. Long enough to let the visual
+            // teardown finish on every peer; short enough to feel like a
+            // crisp rematch.
+            Invoke(nameof(ServerStartRaceFromRestart), restartCleanupDelay + 0.1f);
+        }
+
+        [Server]
+        void ServerStartRaceFromRestart()
+        {
+            // Don't reroll the level — same _activeLevel survives across the
+            // teardown because we only clear it in ServerCleanupRace, which
+            // doesn't touch the field. ServerStartRace re-resolves anyway,
+            // and ResolveSelectedLevel returns the same host vote.
+            ServerStartRace();
         }
 
         // Tear down all per-race networked state. Player objects (DioPlayer)

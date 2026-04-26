@@ -198,10 +198,14 @@ namespace Dio.UI
                 if (!string.IsNullOrEmpty(car.ownerName)) name = car.ownerName;
                 else if (car.isOwned && !string.IsNullOrWhiteSpace(Dio.Common.LocalPrefs.PlayerName)) name = Dio.Common.LocalPrefs.PlayerName;
                 else name = "Racer";
-                _scratchEntries.Add((name, car.progressArc, car.isOwned));
+                // Sort key: rank primarily by checkpoints crossed (graph-
+                // aware), break ties by arc-length progress (smooth measure
+                // between checkpoints). Stuffed into a single comparable
+                // float so the existing sort logic stays one-line.
+                int x = car.CrossedCount;
+                float rankKey = x * 10000f + Mathf.Min(car.progressArc, 9999f);
+                _scratchEntries.Add((FormatNameWithProgress(name, x, car.checkpointsToFinishY), rankKey, car.isOwned));
             }
-            // Negate the distance value so the existing ascending sort puts
-            // the highest progress first (1st place).
             _scratchEntries.Sort((a, b) => b.dist.CompareTo(a.dist));
 
             _positionSb.Clear();
@@ -216,6 +220,15 @@ namespace Dio.UI
                 if (isMe) _positionSb.Append("  (you)");
             }
             positionLabel.text = _positionSb.ToString();
+        }
+
+        // Render "<name> (x/y)". y falls back to x when the server hasn't
+        // computed reachability yet (race-start frame or restart between
+        // ClearConsumedGroups + first ServerCheckpointHit).
+        static string FormatNameWithProgress(string name, int x, int y)
+        {
+            int yy = y > 0 ? y : x;
+            return $"{name} ({x}/{yy})";
         }
 
         static string Ordinal(int n)

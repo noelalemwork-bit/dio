@@ -12,11 +12,32 @@ MonoBehaviour:
   m_Script: {fileID: 11500000, guid: 1bc9a7716bc36b04f93b3d69603db1de, type: 3}
   m_Name: Level 1
   m_EditorClassIdentifier: Assembly-CSharp::Dio.Level.LevelData
-  planetRadius: 200
-  seed: 58512082
-  trackWidth: 6
+  planetRadius: 100
+  seed: 1971830725
+  trackWidth: 15
   points:
-  - directionFromCenter: {x: 0, y: 1, z: 0}
+  - directionFromCenter: {x: 0.29171455, y: 0.45089626, z: 0.84356105}
     bank: 0
-  - directionFromCenter: {x: 0.87468594, y: 0.46411592, z: -0.13971722}
+    inHandle: {x: 0, y: 0, z: 0}
+    outHandle: {x: 0.0021038132, y: 0.6769088, z: 0.73606396}
+    yOffset: 58.346287
+  - directionFromCenter: {x: -0.28781515, y: 0.8037462, z: 0.5207249}
     bank: 0
+    inHandle: {x: 0.0021038132, y: 0.6769088, z: 0.73606396}
+    outHandle: {x: -0.53358436, y: 0.81329906, z: 0.23201793}
+    yOffset: 58.346287
+  - directionFromCenter: {x: 0.3949085, y: 0.8880765, z: 0.23530287}
+    bank: 0
+    inHandle: {x: 0.058042586, y: 0.99362504, z: 0.09664518}
+    outHandle: {x: 0.47289714, y: 0.84009874, z: 0.26571107}
+    yOffset: 58.346287
+  - directionFromCenter: {x: 0.5736972, y: 0.16876103, z: 0.8014931}
+    bank: 0
+    inHandle: {x: 0.15278375, y: -0.3644612, z: 0.9185996}
+    outHandle: {x: 0.6687785, y: 0.3622519, z: 0.64923716}
+    yOffset: 0
+  - directionFromCenter: {x: 0.717272, y: 0.5305079, z: 0.45175472}
+    bank: 0
+    inHandle: {x: 0.6687785, y: 0.3622519, z: 0.64923716}
+    outHandle: {x: 0, y: 0, z: 0}
+    yOffset: 0

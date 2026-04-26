@@ -113,9 +113,62 @@ namespace Dio.UI.EditorTools
             BuildPlayerPrefab();
             Dio.Player.EditorTools.CarPrefabBuilder.BuildCarPrefab();
             Dio.Powerups.EditorTools.PowerupPrefabBuilder.BuildAll();
+            BuildGlobePrefab();
             BuildNetworkManagerPrefab();
             BuildDefaultLevel();
             BuildMainScene();
+        }
+
+        [MenuItem("Tools/Dio/Build/Globe Prefab")]
+        public static GameObject BuildGlobePrefab()
+        {
+            // Stamp the world.fbx hierarchy into Resources/Globe.prefab so a
+            // built player can find it via Resources.Load("Globe"). Mesh
+            // colliders are pre-attached at edit-time so the runtime spawn
+            // path doesn't need to walk the hierarchy.
+            const string ResourcesDir = "Assets/Dio/Resources";
+            const string GlobePrefabPath = ResourcesDir + "/Globe.prefab";
+            EnsureDir(ResourcesDir);
+
+            var src = AssetDatabase.LoadAssetAtPath<GameObject>("Assets/3d world/world.fbx");
+            if (src == null)
+            {
+                Debug.LogError("[Dio] world.fbx not found at Assets/3d world/world.fbx — cannot build Globe prefab.");
+                return null;
+            }
+
+            var instance = (GameObject)PrefabUtility.InstantiatePrefab(src);
+            instance.name = "Globe";
+            instance.transform.localPosition = Vector3.zero;
+            instance.transform.localRotation = Quaternion.identity;
+            instance.transform.localScale = Vector3.one;
+
+            AttachCollidersRecursive(instance.transform);
+
+            var prefab = PrefabUtility.SaveAsPrefabAsset(instance, GlobePrefabPath);
+            Object.DestroyImmediate(instance);
+            Debug.Log($"[Dio] Built Globe prefab at {GlobePrefabPath}");
+            return prefab;
+        }
+
+        // Walk the FBX hierarchy and add a MeshCollider to every GameObject
+        // that has a MeshFilter — except under any subtree named "Environment",
+        // which is purely visual props (clouds, skybox extras) and shouldn't
+        // be collidable.
+        static void AttachCollidersRecursive(Transform t)
+        {
+            const string EnvName = "Environment";
+            if (t.name == EnvName) return;
+
+            var mf = t.GetComponent<MeshFilter>();
+            if (mf != null && mf.sharedMesh != null && t.GetComponent<MeshCollider>() == null)
+            {
+                var mc = t.gameObject.AddComponent<MeshCollider>();
+                mc.sharedMesh = mf.sharedMesh;
+                mc.convex = false;
+            }
+            for (int i = 0; i < t.childCount; i++)
+                AttachCollidersRecursive(t.GetChild(i));
         }
 
         [MenuItem("Tools/Dio/Build/Default Level Asset")]
@@ -127,7 +180,7 @@ namespace Dio.UI.EditorTools
             {
                 lvl = ScriptableObject.CreateInstance<LevelData>();
                 lvl.planetRadius = 200f;
-                lvl.seed = 42;
+                lvl.trackRatio = 1f;
                 lvl.points.Add(new TrackPoint { directionFromCenter = Vector3.up });
                 lvl.points.Add(new TrackPoint { directionFromCenter = new Vector3(0.7f, 0.4f, 0.6f).normalized });
                 AssetDatabase.CreateAsset(lvl, DefaultLevelPath);

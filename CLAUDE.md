@@ -63,6 +63,21 @@ These are the ones the user wants you to investigate with the MCPs:
 
 ## What changed in this session (latest)
 
+### Level editor overhaul — yOffset + world rendering
+
+- **TrackPoint.yOffset** (`LevelData.cs`): new `float yOffset` field for per-anchor height above planet surface (non-negative).
+- **Shift-drag arrows** (`LevelEditorWindow.cs`): holding Shift shows yellow tangent arrows at every anchor; dragging an anchor in this mode edits `yOffset` via ray-to-line intersection. Normal anchor drag is unchanged; track extension moved to Ctrl+click on endpoints.
+- **TrackBuilder yOffset propagation** (`TrackBuilder.cs`): `Build`, `BuildGuards`, `BuildSpawnPad`, `SampleAt`, and `ArcLengthOf` all linearly interpolate `yOffset` across each bezier segment so the lifted track, guard rails, and spawn pad follow the authored offsets.
+- **World.fbx rendering fix** (`LevelEditorWindow.cs`): PreviewRenderUtility can't reliably bind URP shaders, so both fallback and planet materials now force built-in `Unlit/Color`. All submeshes of the FBX are drawn. The planet sphere is drawn 0.5 % inset so the FBX surface sits cleanly on top without z-fighting.
+
+### Powerups — Blue Shell leader targeting
+
+- `BlueShellObstacle.FindLeaderCar()` now uses `DioCar.progressArc` (server SyncVar, fed by `TrackBuilder.ArcLengthOf`) instead of the placeholder `Vector3.Dot(position, forward)` metric.
+
+### Code hygiene
+
+- `CarStateFactory` "kind enum hack" comments replaced with accurate description of the intentional multi-kind → single-state mapping.
+
 ### Networking — switched to client-authority physics
 
 The car was server-authoritative (Cmd → server sim → NetworkTransform back), which added a full RTT of input lag and, in practice, caused joined-player cars to refuse to accelerate. Per the project goal of "perfect physics, no latency on LAN," the car is now **client-authoritative**:

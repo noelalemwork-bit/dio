@@ -563,6 +563,12 @@ namespace Dio.UI
 
         void OnRaceWonLocally(RaceWonMessage msg)
         {
+            // Restart path: the host pressed R and we're tearing down the
+            // visual scene to immediately rebuild on the same level. Skip
+            // the win popup AND the lobby return — RaceStartMessage will
+            // arrive in a moment and re-enter the racing UI.
+            if (msg.isRestart) return;
+
             if (winPanel != null)
             {
                 winPanel.SetActive(true);

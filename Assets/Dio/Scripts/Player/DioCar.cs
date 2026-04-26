@@ -42,10 +42,55 @@ namespace Dio.Player
         // detection. Server-to-client because the server is the only writer.
         [SyncVar] public float progressArc;
 
+        // Anchor indices the car has crossed (one per checkpoint trigger
+        // entered). Server-only writer; clients read for display + sorting.
+        // Includes the start anchor (added on race start) so x always begins
+        // at 1, not 0 — matches the user-visible "1/N" race progress.
+        public readonly SyncList<int> crossedCheckpoints = new SyncList<int>();
+
+        // y in the (x/y) HUD display: the player's x plus the minimum number
+        // of additional checkpoints to reach the finish from their last
+        // crossed checkpoint along the level graph. Server publishes,
+        // clients render.
+        [SyncVar] public int checkpointsToFinishY;
+
+        // Convenience for rendering and ranking.
+        public int CrossedCount => crossedCheckpoints != null ? crossedCheckpoints.Count : 0;
+
+        [Server]
+        public void ServerCheckpointHit(int anchorIndex)
+        {
+            if (crossedCheckpoints == null) return;
+            if (crossedCheckpoints.Contains(anchorIndex)) return;
+            crossedCheckpoints.Add(anchorIndex);
+
+            // Recompute y from the latest crossed set + level graph. The
+            // server is the only writer of this SyncVar.
+            var lvl = Dio.Level.RaceBootstrap.CurrentLevel;
+            if (lvl != null)
+            {
+                int last = anchorIndex;
+                int finish = lvl.points.Count - 1;
+                int dist = Dio.Level.LevelGraph.MinHopsBetween(lvl, last, finish);
+                checkpointsToFinishY = CrossedCount + Mathf.Max(0, dist);
+            }
+        }
+
+        [Server]
+        public void ServerResetCheckpoints()
+        {
+            if (crossedCheckpoints != null) crossedCheckpoints.Clear();
+            checkpointsToFinishY = 0;
+        }
+
         ArcadeCarController _car;
         Rigidbody _rb;
         Renderer[] _renderers;
         Dio.Powerups.States.CarStateMachine _stateMachine;
+
+        bool _inCountdown;
+        Vector3 _countdownStartPos;
+        Quaternion _countdownStartRot;
 
         void Awake()
         {
@@ -55,6 +100,29 @@ namespace Dio.Player
             _stateMachine = GetComponent<Dio.Powerups.States.CarStateMachine>();
             // Default off — DioCar.OnStartClient enables it for the owner.
             _car.readLocalInput = false;
+            DioNetworkManager.OnRaceStarted += OnRaceStarted;
+            DioNetworkManager.OnCountdownEnd += OnCountdownEnd;
+        }
+
+        void OnDestroy()
+        {
+            DioNetworkManager.OnRaceStarted -= OnRaceStarted;
+            DioNetworkManager.OnCountdownEnd -= OnCountdownEnd;
+        }
+
+        void OnRaceStarted(bool isServer, RaceStartMessage msg)
+        {
+            if (isOwned)
+            {
+                _inCountdown = true;
+                _countdownStartPos = transform.position;
+                _countdownStartRot = transform.rotation;
+            }
+        }
+
+        void OnCountdownEnd()
+        {
+            _inCountdown = false;
         }
 
         // Owner-only: apply powerup-state input modifications on top of the
@@ -75,6 +143,22 @@ namespace Dio.Player
             // Tell the controller it doesn't need to re-read this tick.
             // (readLocalInput stays true so it falls back to ReadLocalInputsNow
             // if some other path skips this method.)
+
+            // During countdown, reset velocity to lock position.
+            if (_inCountdown)
+            {
+                _rb.velocity = Vector3.zero;
+                _rb.angularVelocity = Vector3.zero;
+            }
+        }
+
+        void LateUpdate()
+        {
+            // During countdown, lock transform to start position.
+            if (_inCountdown)
+            {
+                transform.SetPositionAndRotation(_countdownStartPos, _countdownStartRot);
+            }
         }
 
         public override void OnStartServer()

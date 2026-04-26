@@ -94,8 +94,15 @@ namespace Dio.Level.Obstacles
             Vector3 dir = (transform.position - planetCenter).normalized;
             if (dir.sqrMagnitude < 1e-4f) dir = Vector3.up;
             var lvl = Dio.Level.RaceBootstrap.CurrentLevel;
-            float r = lvl != null ? lvl.planetRadius : (transform.position - planetCenter).magnitude;
-            // Sit a hair above the road so the disc doesn't z-fight the track.
+            // Use the actual surface raycaster (preserves uneven terrain
+            // height); fall back to NominalRadius and finally to the
+            // hazard's own radial position. The hazard's pre-spawn position
+            // matters less than landing on the actual mesh so it doesn't
+            // hover or sink on bumpy planets.
+            var raycaster = Dio.Level.RaceBootstrap.CurrentRaycaster;
+            float r = raycaster != null
+                ? raycaster.ResolveSurfaceRadius(dir)
+                : (lvl != null ? lvl.NominalRadius : (transform.position - planetCenter).magnitude);
             transform.position = planetCenter + dir * (r + 0.05f);
             Vector3 fwd = Vector3.ProjectOnPlane(transform.forward, dir).normalized;
             if (fwd.sqrMagnitude < 1e-4f) fwd = Vector3.Cross(dir, Vector3.right).normalized;

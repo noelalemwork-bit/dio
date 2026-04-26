@@ -296,7 +296,9 @@ PowerupEffect (abstract)
 ### 11.1 Known bugs / sharp edges
 
 - **Solo-bypass no-player branch** (`_players.Count == 0`): the spawned car has no authority, so the host can't drive it. Normally never hit because StartHost adds a DioPlayer for the local connection — but if you bypass the menu, you'll see a static car. Workaround: always go through "Host Game" in the menu.
-- **Blue Shell target selection** is a placeholder dot-product. Replace with the M2 arc-length-progress tracker.
+- **Blue Shell target selection** ~~is a placeholder dot-product~~ → **FIXED** (`ProjectileObstacle.cs`): now uses `DioCar.progressArc` SyncVar for arc-length-based leader detection.
+- **Level editor yOffset** → **FIXED** (`LevelData.cs`, `LevelEditorWindow.cs`, `TrackBuilder.cs`): `TrackPoint` now has `float yOffset`; Shift+drag on any anchor lifts it along the surface normal; arrows drawn in editor; yOffset interpolated across bezier segments in track mesh, guard rails, spawn pad, `SampleAt`, and `ArcLengthOf`.
+- **World.fbx grey sphere** → **FIXED** (`LevelEditorWindow.cs`): forced built-in `Unlit/Color` shader for PreviewRenderUtility (URP shaders don't bind under PRU); draws all submeshes; planet sphere drawn 0.5 % inset so FBX sits on top without z-fighting.
 - **Vector-quality SVG rendering** requires the `com.unity.vectorgraphics` package; without it, SVGs display through plain `Image` (still readable, just rasterised at the import resolution). With the package, install it then run `Tools → Dio → Build → Re-import SVGs` once so the new importer processes the existing `.svg` files.
 - **PowerupHolder activation** uses `E` by default — wire `activateAction` in the inspector to a real Input System binding when adding controller support.
 
@@ -348,7 +350,27 @@ Cars, pickups, and vegetation are intentionally **excluded from the camera's cul
 
 The scene builder already reserves a `Minimap` RectTransform with a `PlayerMarker` child; the future `MinimapController` swaps the SVG sprite on `Minimap` for a `RawImage` referencing the RenderTexture, then drives marker positions in `LateUpdate`.
 
-## 12. Open questions
+## 12. Discovered issues & future desired features
+
+### Fixed in this pass
+- `TrackPoint.yOffset` editor shift-drag arrows, TrackBuilder interpolation, guard-rail/spawn-pad lifting.
+- Blue Shell leader targeting now uses `progressArc` instead of placeholder dot-product.
+- World.fbx PreviewRenderUtility rendering — forced built-in `Unlit/Color`, all submeshes, planet inset to prevent occlusion.
+- `CarStateFactory` "enum hack" comments cleaned up.
+
+### Still open / needs verification
+1. **UI responsive design overhaul** — `MainMenuController.cs` (435 lines) builds UI programmatically with hard-coded pixel rects. Should migrate to Unity Canvas + Canvas Scaler + anchoring, and use `com.unity.vectorgraphics` SVG icons for crisp scaling at any resolution.
+2. **Minimap RenderTexture** — currently a static SVG placeholder. Needs orthographic top-down camera + RenderTexture + UI marker projection (see §11.4).
+3. **Lap / finish detection** — `TrackBuilder.ArcLengthOf` exists and feeds `DioCar.progressArc`, but no finish-line trigger or lap counter UI is wired up yet. Need a collider at the start point + `OnTriggerEnter` that checks arc-length wraparound.
+4. **NetworkTransform audit** — verify `syncDirection`, `sendRate`, `onlySyncOnChange` settings on all networked prefabs via `NetworkTransformConfigurer.cs`. Particularly important for client-authority car physics.
+5. **PowerupBox groupId + `consumedGroups` verification** — logic looks complete but has never been tested in a real 2+ player race. Need to confirm duplicate-pick prevention works across reconnects.
+6. **CarStateMachine `IsInvincible`** — Star powerup path seems correct (`StarState` sets the flag, `CarStateMachine` clears on removal), but no automated test exists.
+7. **Level editor full GameObject preview** — user wants a full GameObject rendered inside the editor (not just PRU backdrop) so track mesh generates in real-time. This would require migrating from `PreviewRenderUtility` to an in-scene preview camera or an `EditorWindow` that instantiates temporary scene objects.
+8. **Track mesh UV mapping & banking** — `TrackPoint.bank` field exists but is unused. Track mesh currently uses `uvU = arcCursor / trackWidth` which gives a repeating pattern; real UVs should tile along the track length and across the width independently.
+9. **Procedural shader pipeline** — `Dio/EarthPlanet` and other custom shaders may fail in URP under certain quality settings. Verify all shaders compile in URP and don't reference `Library/PackageCache/` paths.
+10. **Vehicle parametrised `VehicleProfile`** — `VehicleProfile` ScriptableObject exists but may not be wired into `RaceBootstrap` or the car prefab builder. Verify the profile actually drives wheel radius, mass, suspension, etc.
+
+## 13. Open questions
 
 - **Bank angle** for fast cornering — defer until we have track-mesh sweeping; tracked in `TrackPoint.bank`.
 - **Wraparound finish line** vs. **point-to-point** races — both are easy on a geodesic; choose per-level.

@@ -17,9 +17,9 @@ namespace Dio.Powerups.States
                 case PowerupKind.TripleBoost: return new SpeedBoostState();
                 case PowerupKind.Star:        return new StarState();
                 case PowerupKind.Lightning:   return new ShrunkState();
-                // Static-hazard slip + tumble share the same kind enum hack
-                // (SlipperyState.Kind == OilSlick, TumbleState.Kind ==
-                // GreenShell). Map the kind back to a sensible default.
+                // Multiple kinds map to the same CarState type with different
+                // parameters. The SyncList stores the original PowerupKind so
+                // visuals are distinct; the factory creates the right variant.
                 case PowerupKind.Banana:      return new SlipperyState { Mode = SlipperyState.SlipMode.RandomSteer };
                 case PowerupKind.OilSlick:    return new SlipperyState { Mode = SlipperyState.SlipMode.ZeroSteer };
                 case PowerupKind.GreenShell:

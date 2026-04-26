@@ -157,14 +157,14 @@ namespace Dio.Level.Obstacles
         Transform FindLeaderCar()
         {
             DioCar best = null;
-            float bestAlt = float.NegativeInfinity;
+            float bestArc = float.NegativeInfinity;
             foreach (var ni in NetworkServer.spawned.Values)
             {
                 var car = ni.GetComponent<DioCar>();
-                if (car == null) continue;
-                // Placeholder: pick the car furthest from the spawn direction (transform.forward).
-                float metric = Vector3.Dot(car.transform.position.normalized, transform.forward);
-                if (metric > bestAlt) { bestAlt = metric; best = car; }
+                if (car == null || car == this) continue;
+                // Leader = highest arc-length progress along the track.
+                float arc = car.progressArc;
+                if (arc > bestArc) { bestArc = arc; best = car; }
             }
             return best != null ? best.transform : null;
         }

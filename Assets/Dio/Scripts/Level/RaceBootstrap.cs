@@ -25,6 +25,12 @@ namespace Dio.Level
         /// dedicated layer.
         public static GameObject CurrentTrack { get; private set; }
 
+        /// Software raycaster against the spawned Globe. Public so the network
+        /// manager can resolve correct surface heights at car spawn — without
+        /// it we'd be using NominalRadius and cars would clip through the
+        /// terrain on uneven planets.
+        public static GlobeRaycaster CurrentRaycaster { get; private set; }
+
         /// Layer index reserved for "things visible to the minimap camera" —
         /// the planet and the track strip. Other things (cars, obstacles, UI)
         /// stay off this layer so the minimap stays clean.
@@ -40,7 +46,9 @@ namespace Dio.Level
         GameObject _track;
         GameObject _guards;
         GameObject _spawnPad;
+        GameObject _checkpoints;
         Camera _cam;
+        GlobeRaycaster _raycaster;
 
         void Awake()
         {
@@ -56,7 +64,48 @@ namespace Dio.Level
 
         void Start() { if (autoStartInEditor) BuildVisualScene(defaultLevel); }
 
-        void OnRaceStarted(bool _, RaceStartMessage __) => BuildVisualScene(defaultLevel);
+        // Resolve the server-chosen level on every peer. Priority order:
+        //   1. The host/server's authoritative `_activeLevel` (host case).
+        //   2. The catalog entry at the index sent in the message
+        //      (remote-client case — same catalog wired into the prefab).
+        //   3. The legacy GUID string, only useful in editor play-mode where
+        //      AssetDatabase is available.
+        //   4. The bootstrap's `defaultLevel` field (last-ditch fallback).
+        // Without this, every peer used `defaultLevel` regardless of the
+        // host's vote — the bug behind "only one track loads".
+        void OnRaceStarted(bool _, RaceStartMessage msg)
+        {
+            var lvl = ResolveLevelFromMessage(msg);
+            BuildVisualScene(lvl);
+        }
+
+        Dio.Level.LevelData ResolveLevelFromMessage(RaceStartMessage msg)
+        {
+            var mgr = DioNetworkManager.Instance;
+            // Host already has _activeLevel set on server before broadcasting.
+            if (mgr != null && mgr.ActiveLevel != null && mgr.ActiveLevel.HasMinimum)
+                return mgr.ActiveLevel;
+
+            // Remote client: pick by catalog index.
+            if (mgr != null && mgr.levelCatalog != null && msg.levelCatalogIndex >= 0
+                && msg.levelCatalogIndex < mgr.levelCatalog.Length
+                && mgr.levelCatalog[msg.levelCatalogIndex] != null)
+                return mgr.levelCatalog[msg.levelCatalogIndex];
+
+#if UNITY_EDITOR
+            if (!string.IsNullOrEmpty(msg.levelGuid))
+            {
+                string p = UnityEditor.AssetDatabase.GUIDToAssetPath(msg.levelGuid);
+                if (!string.IsNullOrEmpty(p))
+                {
+                    var lvl = UnityEditor.AssetDatabase.LoadAssetAtPath<Dio.Level.LevelData>(p);
+                    if (lvl != null) return lvl;
+                }
+            }
+#endif
+            Debug.LogWarning($"[RaceBootstrap] could not resolve level from RaceStartMessage (idx={msg.levelCatalogIndex} guid='{msg.levelGuid}'). Falling back to defaultLevel.");
+            return defaultLevel;
+        }
 
         void OnRaceWon(RaceWonMessage msg)
         {
@@ -69,6 +118,7 @@ namespace Dio.Level
         // touch them here.
         public void CleanupLocalScene()
         {
+            if (_checkpoints != null) { Destroy(_checkpoints); _checkpoints = null; }
             if (_spawnPad != null) { Destroy(_spawnPad); _spawnPad = null; }
             if (_guards != null) { Destroy(_guards); _guards = null; }
             if (_track != null) { Destroy(_track); _track = null; }
@@ -76,6 +126,7 @@ namespace Dio.Level
             CurrentPlanet = null;
             CurrentLevel = null;
             CurrentTrack = null;
+            CurrentRaycaster = null;
 
             // Detach the race camera so it stops following a destroyed car.
             if (_cam != null)
@@ -117,12 +168,59 @@ namespace Dio.Level
                 return;
             }
 
-            Debug.Log($"[RaceBootstrap] BuildVisualScene level='{level.name}' radius={level.planetRadius}");
+            Debug.Log($"[RaceBootstrap] BuildVisualScene level='{level.name}' circumference={level.circumference}");
             CurrentLevel = level;
-            EnsurePlanet(level.planetRadius);
+            EnsurePlanet(level);
+            // Build a raycaster from the spawned globe so every height-aware
+            // builder (track, guards, spawn pad) hugs the same surface that
+            // the cars will physically collide with.
+            _raycaster = BuildRaycaster(level);
             EnsureTrack(level);
             EnsureGuards(level);
             EnsureSpawnPad(level);
+            EnsureCheckpoints(level);
+        }
+
+        // Spawn one CheckpointTrigger per anchor on the SERVER (the host).
+        // Pure clients don't need them — they read crossedCheckpoints off
+        // each DioCar via SyncList. Trigger radius = effective track width
+        // plus a small bonus so a creative line / jump still passes through.
+        void EnsureCheckpoints(LevelData level)
+        {
+            if (_checkpoints != null) Destroy(_checkpoints);
+            // Triggers exist server-side only; clients don't simulate physics
+            // against them and would just waste GameObjects.
+            if (!Mirror.NetworkServer.active) return;
+
+            _checkpoints = new GameObject("Checkpoints");
+            _checkpoints.transform.SetParent(_planet != null ? _planet.transform.parent : null, true);
+
+            float radius = Mathf.Max(2f, level.EffectiveTrackWidth * 0.75f);
+            int finishIdx = level.points.Count - 1;
+            for (int i = 0; i < level.points.Count; i++)
+            {
+                Vector3 pos = level.ResolvePosition(i, _raycaster);
+                var go = new GameObject($"Checkpoint{i}", typeof(SphereCollider), typeof(CheckpointTrigger));
+                go.transform.SetParent(_checkpoints.transform, false);
+                go.transform.position = pos;
+                var sc = go.GetComponent<SphereCollider>();
+                sc.isTrigger = true;
+                sc.radius = radius;
+                var cp = go.GetComponent<CheckpointTrigger>();
+                cp.anchorIndex = i;
+                cp.isFinish = (i == finishIdx);
+            }
+        }
+
+        GlobeRaycaster BuildRaycaster(LevelData level)
+        {
+            if (_planet == null) return null;
+            // Snapshot every MeshFilter under the spawned globe so software
+            // raycasts in code paths that lack physics access still work.
+            var snaps = GlobeFactory.CollectSnapshots(_planet, 1f);
+            var rc = new GlobeRaycaster(snaps, level.NominalRadius);
+            CurrentRaycaster = rc;
+            return rc;
         }
 
         // Short straight ribbon behind the start line + a back wall, so cars
@@ -138,8 +236,19 @@ namespace Dio.Level
             const float perRowSpacing = 4.5f;
             const int worstCaseRows = 4;       // 8 cars / 3 per row → 3 rows; +1 buffer
             float length = backBuffer + worstCaseRows * perRowSpacing;
-            var (ribbon, wall) = TrackBuilder.BuildSpawnPad(level, length);
-            if (ribbon == null) return;
+
+            // Use the same Z-section options as the main track guards so the
+            // pad's side rails feel identical to the rest of the track —
+            // including the visible elevation skirt for elevated start lines.
+            var guardOpt = TrackBuilder.GuardOptions.Default;
+            guardOpt.wallHeight = 2.2f;
+            guardOpt.lipOutward = 0.4f;
+            guardOpt.outwardOffset = 0.05f;
+            guardOpt.floorAtSurface = true;
+            guardOpt.floorPad = 1f;
+            guardOpt.addEndcaps = false;
+            var pad = TrackBuilder.BuildSpawnPad(level, length, _raycaster, guardOpt);
+            if (pad.ribbon == null) return;
 
             _spawnPad = new GameObject("SpawnPad");
             _spawnPad.transform.SetParent(_planet != null ? _planet.transform.parent : null, true);
@@ -151,25 +260,32 @@ namespace Dio.Level
             var ribbonGo = new GameObject("Ribbon", typeof(MeshFilter), typeof(MeshRenderer), typeof(MeshCollider));
             ribbonGo.transform.SetParent(_spawnPad.transform, false);
             ribbonGo.layer = MinimapLayer;
-            ribbonGo.GetComponent<MeshFilter>().sharedMesh = ribbon;
+            ribbonGo.GetComponent<MeshFilter>().sharedMesh = pad.ribbon;
             if (asphalt != null) ribbonGo.GetComponent<MeshRenderer>().sharedMaterial = asphalt;
             var rmc = ribbonGo.GetComponent<MeshCollider>();
-            rmc.sharedMesh = ribbon; rmc.convex = false;
+            rmc.sharedMesh = pad.ribbon; rmc.convex = false;
 
-            if (wall != null)
+            // Side rails — same material as the main guards so they read as
+            // the natural continuation of the track behind the start line.
+            Shader wsh = Shader.Find("Universal Render Pipeline/Lit") ?? Shader.Find("Standard");
+            var railMat = new Material(wsh) { name = "SpawnPadRail (runtime)" };
+            railMat.color = new Color(0.20f, 0.18f, 0.22f, 1f);
+            if (railMat.HasProperty("_Cull")) railMat.SetFloat("_Cull", 0f);
+
+            void AttachMesh(string name, Mesh mesh, Material mat)
             {
-                Shader wsh = Shader.Find("Universal Render Pipeline/Lit") ?? Shader.Find("Standard");
-                var wmat = new Material(wsh) { name = "SpawnPadWall (runtime)" };
-                wmat.color = new Color(0.20f, 0.18f, 0.22f, 1f);
-
-                var wallGo = new GameObject("BackWall", typeof(MeshFilter), typeof(MeshRenderer), typeof(MeshCollider));
-                wallGo.transform.SetParent(_spawnPad.transform, false);
-                wallGo.layer = MinimapLayer;
-                wallGo.GetComponent<MeshFilter>().sharedMesh = wall;
-                wallGo.GetComponent<MeshRenderer>().sharedMaterial = wmat;
-                var wmc = wallGo.GetComponent<MeshCollider>();
-                wmc.sharedMesh = wall; wmc.convex = false;
+                if (mesh == null) return;
+                var go = new GameObject(name, typeof(MeshFilter), typeof(MeshRenderer), typeof(MeshCollider));
+                go.transform.SetParent(_spawnPad.transform, false);
+                go.layer = MinimapLayer;
+                go.GetComponent<MeshFilter>().sharedMesh = mesh;
+                go.GetComponent<MeshRenderer>().sharedMaterial = mat;
+                var mc = go.GetComponent<MeshCollider>();
+                mc.sharedMesh = mesh; mc.convex = false;
             }
+            AttachMesh("GuardLeft",  pad.guardLeft,  railMat);
+            AttachMesh("GuardRight", pad.guardRight, railMat);
+            AttachMesh("BackWall",   pad.backWall,   railMat);
         }
 
         // Build invisible-but-collidable guard walls along both edges of the
@@ -187,8 +303,14 @@ namespace Dio.Level
             // outward lip that catches a car bouncing off the wall before
             // it can pop over the top. 1m skirt covers the seam to the
             // low-poly planet collider.
-            var (left, right) = TrackBuilder.BuildGuards(level,
-                wallHeight: 2.2f, lipOutward: 0.4f, skirtDepth: 1f, outwardOffset: 0.05f);
+            var opt = TrackBuilder.GuardOptions.Default;
+            opt.wallHeight = 2.2f;
+            opt.lipOutward = 0.4f;
+            opt.outwardOffset = 0.05f;
+            opt.floorAtSurface = true;          // skirt always reaches the actual ground
+            opt.floorPad = 1f;
+            opt.addEndcaps = true;              // close start gate + finish line
+            var (left, right) = TrackBuilder.BuildGuards(level, _raycaster, opt);
             if (left == null || right == null) return;
 
             _guards = new GameObject("Guards");
@@ -227,48 +349,37 @@ namespace Dio.Level
             mc.convex = false;
         }
 
-        void EnsurePlanet(float radius)
+        void EnsurePlanet(LevelData level)
         {
             if (_planet != null) { CurrentPlanet = _planet; return; }
-            // Unity's primitive sphere is a low-poly icosphere — at our 200u
-            // radius the silhouette is visibly faceted and the track strip
-            // (which follows great circles) drifts above/below it. Build a
-            // higher-resolution icosphere so the visible surface lines up
-            // with where the track sits and where SphericalGravity expects.
-            var mesh = HighResIcoSphere.Build(subdivisions: 4);
-            _planet = new GameObject("Planet", typeof(MeshFilter), typeof(MeshRenderer), typeof(SphereCollider));
-            _planet.GetComponent<MeshFilter>().sharedMesh = mesh;
-            _planet.transform.position = Vector3.zero;
-            _planet.transform.localScale = Vector3.one * radius;
-            // SphereCollider takes radius from its Radius field times localScale.x,
-            // so we scale by `radius` (not radius*2 like the primitive sphere) and
-            // leave SphereCollider.radius at 1 — the default.
-            _planet.GetComponent<SphereCollider>().radius = 1f;
-            _planet.layer = MinimapLayer;
-
-            var rend = _planet.GetComponent<Renderer>();
-            if (rend != null)
+            // Spawn the Globe (world.fbx) at the level's circumference. The
+            // factory walks every nested mesh and adds MeshColliders so cars
+            // collide with the actual terrain — no idealised sphere, no
+            // SphereCollider radius hack. The "Environment" subtree (visual-
+            // only props) is excluded from collision attachment.
+            _planet = GlobeFactory.Spawn(transform, level.circumference);
+            if (_planet == null)
             {
-                var earthShader = Shader.Find("Dio/EarthPlanet");
-                if (earthShader != null)
-                {
-                    var mat = new Material(earthShader) { name = "EarthPlanet (runtime)" };
-                    rend.material = mat;
-                }
-                else
-                {
-                    rend.material.color = new Color(0.42f, 0.65f, 0.42f, 1f);
-                }
+                Debug.LogError("[RaceBootstrap] Globe spawn failed; cannot build a level without it.");
+                return;
             }
-
+            // Layer cascades to children for the minimap render filter.
+            SetLayerRecursive(_planet, MinimapLayer);
             CurrentPlanet = _planet;
+        }
+
+        static void SetLayerRecursive(GameObject go, int layer)
+        {
+            go.layer = layer;
+            for (int i = 0; i < go.transform.childCount; i++)
+                SetLayerRecursive(go.transform.GetChild(i).gameObject, layer);
         }
 
         void EnsureTrack(LevelData level)
         {
             if (_track != null) Destroy(_track);
 
-            var mesh = TrackBuilder.Build(level);
+            var mesh = TrackBuilder.Build(level, _raycaster);
             if (mesh == null) return;
 
             _track = new GameObject("Track", typeof(MeshFilter), typeof(MeshRenderer), typeof(MeshCollider));

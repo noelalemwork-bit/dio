@@ -13,20 +13,16 @@ MonoBehaviour:
   m_Name: Level 2
   m_EditorClassIdentifier: Assembly-CSharp::Dio.Level.LevelData
   planetRadius: 200
-  seed: -1491125838
-  trackWidth: 6
+  seed: -827059675
+  trackWidth: 15
   points:
-  - directionFromCenter: {x: 0, y: 1, z: 0}
+  - directionFromCenter: {x: 0.76358426, y: 0.63395035, z: -0.12266233}
     bank: 0
-  - directionFromCenter: {x: 0, y: 0, z: 0}
+    inHandle: {x: 0, y: 0, z: 0}
+    outHandle: {x: 0.5586029, y: -0.54701936, z: -0.62348425}
+    yOffset: 0
+  - directionFromCenter: {x: -0.050382085, y: -0.17123209, z: -0.9839417}
     bank: 0
-  - directionFromCenter: {x: 0, y: 0, z: 0}
-    bank: 0
-  - directionFromCenter: {x: 0, y: 0, z: 0}
-    bank: 0
-  - directionFromCenter: {x: 0, y: 0, z: 0}
-    bank: 0
-  - directionFromCenter: {x: 0, y: 0, z: 0}
-    bank: 0
-  - directionFromCenter: {x: -0.81225747, y: -0.027027166, z: 0.5826726}
-    bank: 0
+    inHandle: {x: 0.1532202, y: 0.93188614, z: -0.32880366}
+    outHandle: {x: 0, y: 0, z: 0}
+    yOffset: 60.935844

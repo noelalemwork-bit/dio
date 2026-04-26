@@ -10,10 +10,10 @@ MonoBehaviour:
   m_Enabled: 1
   m_EditorHideFlags: 0
   m_Script: {fileID: 11500000, guid: be6e569f0d9e0894eaa7321b83e13fc5, type: 3}
-  m_Name: DefaultKart
+  m_Name: RaceProfile
   m_EditorClassIdentifier: Assembly-CSharp::Dio.Player.VehicleProfile
-  displayName: Default Kart
-  bodyMesh: {fileID: 0}
+  displayName: Race Car
+  bodyMesh: {fileID: -8545447256379345787, guid: aff093b1fe07db34daab26e4f402a345, type: 3}
   bodyScale: {x: 1.6, y: 0.7, z: 3.2}
   bodyOffset: {x: 0, y: 0.6, z: 0}
   bodyMaterial: {fileID: 0}
@@ -23,7 +23,7 @@ MonoBehaviour:
   cabinScale: {x: 1.2, y: 0.5, z: 1.4}
   cabinOffset: {x: 0, y: 1.15, z: -0.2}
   cabinMaterial: {fileID: 0}
-  wheelMesh: {fileID: 0}
+  wheelMesh: {fileID: -7543623636664196183, guid: aff093b1fe07db34daab26e4f402a345, type: 3}
   wheelMaterial: {fileID: 0}
   wheelRadius: 0.4
   wheelWidth: 0.2

@@ -13,52 +13,16 @@ MonoBehaviour:
   m_Name: Level
   m_EditorClassIdentifier: Assembly-CSharp::Dio.Level.LevelData
   planetRadius: 200
-  seed: 726063161
-  trackWidth: 6
+  seed: -1200633006
+  trackWidth: 15
   points:
   - directionFromCenter: {x: 0, y: 1, z: 0}
     bank: 0
-  - directionFromCenter: {x: 0, y: 0, z: 0}
+    inHandle: {x: 0, y: 0, z: 0}
+    outHandle: {x: 0.14877199, y: 0.9720377, z: 0.18168567}
+    yOffset: 0
+  - directionFromCenter: {x: -0.09534912, y: 0.4592067, z: 0.8831975}
     bank: 0
-  - directionFromCenter: {x: 0, y: 0, z: 0}
-    bank: 0
-  - directionFromCenter: {x: 0, y: 0, z: 0}
-    bank: 0
-  - directionFromCenter: {x: 0, y: 0, z: 0}
-    bank: 0
-  - directionFromCenter: {x: 0, y: 0, z: 0}
-    bank: 0
-  - directionFromCenter: {x: 0, y: 0, z: 0}
-    bank: 0
-  - directionFromCenter: {x: 0, y: 0, z: 0}
-    bank: 0
-  - directionFromCenter: {x: 0, y: 0, z: 0}
-    bank: 0
-  - directionFromCenter: {x: 0, y: 0, z: 0}
-    bank: 0
-  - directionFromCenter: {x: 0, y: 0, z: 0}
-    bank: 0
-  - directionFromCenter: {x: 0, y: 0, z: 0}
-    bank: 0
-  - directionFromCenter: {x: 0, y: 0, z: 0}
-    bank: 0
-  - directionFromCenter: {x: 0, y: 0, z: 0}
-    bank: 0
-  - directionFromCenter: {x: 0, y: 0, z: 0}
-    bank: 0
-  - directionFromCenter: {x: 0, y: 0, z: 0}
-    bank: 0
-  - directionFromCenter: {x: 0, y: 0, z: 0}
-    bank: 0
-  - directionFromCenter: {x: 0, y: 0, z: 0}
-    bank: 0
-  - directionFromCenter: {x: 0, y: 0, z: 0}
-    bank: 0
-  - directionFromCenter: {x: 0, y: 0, z: 0}
-    bank: 0
-  - directionFromCenter: {x: 0, y: 0, z: 0}
-    bank: 0
-  - directionFromCenter: {x: 0, y: 0, z: 0}
-    bank: 0
-  - directionFromCenter: {x: 0.0033818136, y: -0.64251643, z: -0.76626444}
-    bank: 0
+    inHandle: {x: -0.60506046, y: 0.7359085, z: 0.30387583}
+    outHandle: {x: 0, y: 0, z: 0}
+    yOffset: 0

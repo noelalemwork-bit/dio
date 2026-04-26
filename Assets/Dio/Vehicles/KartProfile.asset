@@ -10,20 +10,20 @@ MonoBehaviour:
   m_Enabled: 1
   m_EditorHideFlags: 0
   m_Script: {fileID: 11500000, guid: be6e569f0d9e0894eaa7321b83e13fc5, type: 3}
-  m_Name: DefaultKart
+  m_Name: KartProfile
   m_EditorClassIdentifier: Assembly-CSharp::Dio.Player.VehicleProfile
-  displayName: Default Kart
-  bodyMesh: {fileID: 0}
-  bodyScale: {x: 1.6, y: 0.7, z: 3.2}
+  displayName: Kart
+  bodyMesh: {fileID: 5789624589016545078, guid: 92215bc01f418304291f7127e9460597, type: 3}
+  bodyScale: {x: 1.2, y: 0.5, z: 2}
   bodyOffset: {x: 0, y: 0.6, z: 0}
   bodyMaterial: {fileID: 0}
   addBodyCollider: 1
   includeCabin: 1
-  cabinMesh: {fileID: 0}
-  cabinScale: {x: 1.2, y: 0.5, z: 1.4}
-  cabinOffset: {x: 0, y: 1.15, z: -0.2}
+  cabinMesh: {fileID: 2791369629923464968, guid: 92215bc01f418304291f7127e9460597, type: 3}
+  cabinScale: {x: 0.8, y: 0.4, z: 0.8}
+  cabinOffset: {x: 0, y: 0.8, z: -0.1}
   cabinMaterial: {fileID: 0}
-  wheelMesh: {fileID: 0}
+  wheelMesh: {fileID: -7543623636664196183, guid: 92215bc01f418304291f7127e9460597, type: 3}
   wheelMaterial: {fileID: 0}
   wheelRadius: 0.4
   wheelWidth: 0.2
