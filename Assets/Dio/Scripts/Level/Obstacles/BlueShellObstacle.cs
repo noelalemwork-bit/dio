@@ -67,12 +67,18 @@ namespace Dio.Level.Obstacles
         {
             RpcSpawnImpactBurst(transform.position, new Color(0.28f, 0.60f, 1f, 1f), 1.5f);
             var hits = Physics.OverlapSphere(transform.position, explosionRadius);
+            // Dedup: a single car can have multiple colliders (chassis +
+            // wheel + cabin), so we'd otherwise apply state and flash the
+            // screen once per child collider — multiplying the effect.
+            var seen = new System.Collections.Generic.HashSet<DioCar>();
             foreach (var h in hits)
             {
                 var car = CarOf(h);
-                if (car == null) continue;
+                if (car == null || !seen.Add(car)) continue;
                 ApplyState(car, new BlueShellBlindState(), blindDuration);
                 ApplyClientImpact(car, transform.position, explosionImpulse, 1.0f, 8f);
+                if (car.connectionToClient != null)
+                    car.TargetFlashScreen(car.connectionToClient, Dio.Powerups.PowerupKind.BlueShell, blindDuration);
             }
             ServerDespawn();
         }

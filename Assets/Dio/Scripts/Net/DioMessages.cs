@@ -36,6 +36,14 @@ namespace Dio.Net
         public Dio.Level.LevelData level;
     }
 
+    /// Server → all clients. Authoritative GO! signal. The server broadcasts
+    /// this exactly once, after its 4 s countdown elapses, and every peer
+    /// (host + guests) flips its inputsLocked + fires OnCountdownEnd on
+    /// receipt — no NetworkTime convergence math, no per-peer drift. LAN
+    /// latency here is sub-millisecond, so all peers unlock effectively
+    /// simultaneously.
+    public struct RaceGoMessage : NetworkMessage { }
+
     public struct RaceWonMessage : NetworkMessage
     {
         public string winnerName;

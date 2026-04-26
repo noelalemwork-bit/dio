@@ -19,15 +19,80 @@ namespace Dio.Player.EditorTools
     public static class CarPrefabBuilder
     {
         const string PrefabsDir   = "Assets/Dio/Prefabs";
+        const string CarsDir      = "Assets/Dio/Prefabs/Cars";
         const string MaterialsDir = "Assets/Dio/Prefabs/Materials";
         const string ProfilesDir  = "Assets/Dio/Vehicles";
+        // Default path used when no profile is supplied — kept stable for any
+        // legacy code that still references DioNetworkManager.carPrefab.
         const string CarPrefabPath = PrefabsDir + "/Car.prefab";
         const string DefaultProfilePath = ProfilesDir + "/DefaultKart.asset";
 
         [MenuItem("Tools/Dio/Build/Car Prefab")]
         public static GameObject BuildCarPrefab() => BuildCarPrefab(GetOrCreateDefaultProfile());
 
+        // Build every VehicleProfile asset under Assets/Dio/Vehicles into its
+        // own per-profile prefab under Assets/Dio/Prefabs/Cars/. Returns the
+        // built prefabs in deterministic order — caller can wire the array
+        // straight into DioNetworkManager.carPrefabs so the game randomly
+        // assigns one of these on race start.
+        [MenuItem("Tools/Dio/Build/All Car Prefabs")]
+        public static GameObject[] BuildAllCarPrefabs()
+        {
+            var profiles = LoadAllProfiles();
+            var built = new System.Collections.Generic.List<GameObject>(profiles.Length);
+            foreach (var p in profiles)
+            {
+                if (p == null) continue;
+                var go = BuildCarPrefab(p, CarPathFor(p));
+                if (go != null) built.Add(go);
+            }
+            AssetDatabase.SaveAssets();
+            Debug.Log($"[Dio] Built {built.Count} car prefabs from {profiles.Length} profiles.");
+            return built.ToArray();
+        }
+
+        public static VehicleProfile[] LoadAllProfiles()
+        {
+            EnsureDir(ProfilesDir);
+            var guids = AssetDatabase.FindAssets("t:VehicleProfile", new[] { ProfilesDir });
+            var paths = new System.Collections.Generic.List<string>(guids.Length);
+            foreach (var g in guids) paths.Add(AssetDatabase.GUIDToAssetPath(g));
+            paths.Sort(); // deterministic order
+            var list = new System.Collections.Generic.List<VehicleProfile>(paths.Count);
+            foreach (var path in paths)
+            {
+                var p = AssetDatabase.LoadAssetAtPath<VehicleProfile>(path);
+                if (p != null) list.Add(p);
+            }
+            return list.ToArray();
+        }
+
+        // Resolve the per-profile prefab path. Slashes / spaces in
+        // displayName are sanitised; the asset filename is what shows up in
+        // the project view.
+        public static string CarPathFor(VehicleProfile profile)
+        {
+            string slug = SanitizeSlug(profile.displayName);
+            if (string.IsNullOrEmpty(slug)) slug = profile.name;
+            return $"{CarsDir}/Car_{slug}.prefab";
+        }
+
+        static string SanitizeSlug(string s)
+        {
+            if (string.IsNullOrEmpty(s)) return "";
+            var sb = new System.Text.StringBuilder(s.Length);
+            foreach (var c in s)
+            {
+                if (char.IsLetterOrDigit(c)) sb.Append(c);
+                else if (c == ' ' || c == '_' || c == '-') sb.Append('_');
+            }
+            return sb.ToString();
+        }
+
         public static GameObject BuildCarPrefab(VehicleProfile profile)
+            => BuildCarPrefab(profile, CarPrefabPath);
+
+        public static GameObject BuildCarPrefab(VehicleProfile profile, string outputPath)
         {
             EnsureDir(PrefabsDir);
             EnsureDir(MaterialsDir);
@@ -93,6 +158,10 @@ namespace Dio.Player.EditorTools
             root.AddComponent<DioCar>();
             root.AddComponent<Dio.Powerups.States.CarStateMachine>();
             root.AddComponent<Dio.Powerups.PowerupHolder>();
+            // Owner-side safety net: snap back to last known on-track pose
+            // if the car drops below the planet surface or launches off
+            // into space. Runs only on the owner; remote peers ignore it.
+            root.AddComponent<OffRoadRespawn>();
 
             // -- Boost trail (visual fx) --
             // Two short streamers behind the rear wheels; emitting is toggled
@@ -109,11 +178,12 @@ namespace Dio.Player.EditorTools
             rightSync.trail = trailRight;
 
             // -- Save prefab --
-            if (File.Exists(CarPrefabPath)) AssetDatabase.DeleteAsset(CarPrefabPath);
-            var prefab = PrefabUtility.SaveAsPrefabAsset(root, CarPrefabPath);
+            EnsureDir(System.IO.Path.GetDirectoryName(outputPath).Replace('\\', '/'));
+            if (File.Exists(outputPath)) AssetDatabase.DeleteAsset(outputPath);
+            var prefab = PrefabUtility.SaveAsPrefabAsset(root, outputPath);
             Object.DestroyImmediate(root);
 
-            Debug.Log($"[Dio] Built car prefab '{profile.displayName}' at {CarPrefabPath}");
+            Debug.Log($"[Dio] Built car prefab '{profile.displayName}' at {outputPath}");
             return prefab;
         }
 
@@ -290,6 +360,12 @@ namespace Dio.Player.EditorTools
             visualRoot.transform.SetParent(parent, false);
             visualRoot.transform.localPosition = wcGo.transform.localPosition;
 
+            // `wheelVisualScale` is applied to the visual mesh ONLY — the
+            // WheelCollider above keeps the unscaled `p.wheelRadius` so
+            // physics behaves identically. Lets a profile (e.g. the Kenney
+            // pack) draw chunkier wheels than the collision radius would
+            // suggest without messing up handling.
+            float vScale = Mathf.Max(0.01f, p.wheelVisualScale);
             GameObject mesh;
             if (p.wheelMesh != null)
             {
@@ -299,7 +375,7 @@ namespace Dio.Player.EditorTools
                 // Custom meshes must already be authored with X as axle. Apply
                 // user's wheel-mesh extra scale + radius/width as a fallback
                 // on top of any built-in mesh scale.
-                mesh.transform.localScale = new Vector3(p.wheelWidth, p.wheelRadius * 2f, p.wheelRadius * 2f);
+                mesh.transform.localScale = new Vector3(p.wheelWidth, p.wheelRadius * 2f, p.wheelRadius * 2f) * vScale;
             }
             else
             {
@@ -310,7 +386,7 @@ namespace Dio.Player.EditorTools
                 // Cylinder primitive: 1u diameter, 2u height. We want diameter = radius*2 and height = width.
                 // After 90° around Z, mesh-local Y is the axle, X/Z are diameter axes.
                 float diameter = p.wheelRadius * 2f;
-                mesh.transform.localScale = new Vector3(diameter, p.wheelWidth * 0.5f, diameter);
+                mesh.transform.localScale = new Vector3(diameter, p.wheelWidth * 0.5f, diameter) * vScale;
                 Object.DestroyImmediate(mesh.GetComponent<CapsuleCollider>());
             }
             var rend = mesh.GetComponent<MeshRenderer>();

@@ -154,11 +154,20 @@ namespace Dio.Net
         {
             base.OnStartClient();
             NetworkClient.ReplaceHandler<RaceStartMessage>(OnClientRaceStart);
+            NetworkClient.ReplaceHandler<RaceGoMessage>(OnClientRaceGo);
             NetworkClient.ReplaceHandler<RaceWonMessage>(OnClientRaceWon);
             // Client receives manifest snapshots whenever the server's
             // catalog changes — both at startup AND on every join/leave.
             NetworkClient.ReplaceHandler<PlayerLevelManifestMessage>(OnClientManifest);
             RegisterAllNetworkedPrefabs();
+        }
+
+        // Server-fired GO! Every peer (host included) gets it from the
+        // network broadcast and flips its local "race active" state via the
+        // OnCountdownEnd event. Replaces peer-side NetworkTime checks.
+        void OnClientRaceGo(RaceGoMessage _)
+        {
+            OnCountdownEnd?.Invoke();
         }
 
         [Server]
@@ -377,6 +386,27 @@ namespace Dio.Net
             // we don't manually call OnRaceStarted to avoid double-firing.
             if (!NetworkClient.active)
                 OnRaceStarted?.Invoke(true, msg);
+
+            // Schedule the authoritative GO!. Server fires RaceGoMessage
+            // exactly 4 s later (matching the visible 3-2-1 countdown). All
+            // peers — host's local client included — flip inputsLocked
+            // off + fire OnCountdownEnd from the message arrival, NOT from
+            // peer-side NetworkTime convergence. Without this, clients with
+            // a fractional NetworkTime offset to the server unlocked at a
+            // slightly different wall-clock instant than the host (felt as
+            // "host starts first, others have a delay").
+            CancelInvoke(nameof(ServerSendRaceGo));
+            Invoke(nameof(ServerSendRaceGo), 4f);
+        }
+
+        [Server]
+        void ServerSendRaceGo()
+        {
+            var go = new RaceGoMessage();
+            NetworkServer.SendToAll(go);
+            // Headless server has no local NetworkClient receiving the
+            // message, so fire the local event manually for symmetry.
+            if (!NetworkClient.active) OnCountdownEnd?.Invoke();
         }
 
         [Server]

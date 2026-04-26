@@ -64,14 +64,17 @@ namespace Dio.Level.Obstacles
             _exploded = true;
             RpcSpawnImpactBurst(transform.position, new Color(1f, 0.48f, 0.20f, 1f), 1.8f);
             var hits = Physics.OverlapSphere(transform.position, explosionRadius);
+            var seen = new System.Collections.Generic.HashSet<DioCar>();
             foreach (var h in hits)
             {
                 var car = CarOf(h);
-                if (car == null) continue;
+                if (car == null || !seen.Add(car)) continue;
                 // Owner-immunity: don't blow up the player who dropped it.
                 if (IsOwnerImmune(car)) continue;
                 ApplyState(car, new BobombBlastState(), tumbleDuration);
                 ApplyClientImpact(car, transform.position, explosionImpulse, 1.4f, 11f);
+                if (car.connectionToClient != null)
+                    car.TargetFlashScreen(car.connectionToClient, Dio.Powerups.PowerupKind.Bobomb, tumbleDuration);
             }
             ServerDespawn();
         }

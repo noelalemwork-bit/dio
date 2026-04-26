@@ -111,7 +111,14 @@ namespace Dio.UI.EditorTools
 
             ReimportSvgs(); // ensure com.unity.vectorgraphics has processed every .svg before we look up sprites
             BuildPlayerPrefab();
+            // Author / refresh the Kenney VehicleProfile assets first, so
+            // BuildAllCarPrefabs has up-to-date input. Idempotent — re-running
+            // updates the existing assets in place.
+            Dio.Player.EditorTools.KenneyProfileAuthor.Author();
             Dio.Player.EditorTools.CarPrefabBuilder.BuildCarPrefab();
+            // Build a per-profile prefab for every Vehicles/*.asset so the
+            // network manager has a randomised pool to spawn from.
+            Dio.Player.EditorTools.CarPrefabBuilder.BuildAllCarPrefabs();
             Dio.Powerups.EditorTools.PowerupPrefabBuilder.BuildAll();
             BuildGlobePrefab();
             BuildNetworkManagerPrefab();
@@ -233,6 +240,10 @@ namespace Dio.UI.EditorTools
             // Wire car prefab + default level if they exist.
             var car = AssetDatabase.LoadAssetAtPath<GameObject>("Assets/Dio/Prefabs/Car.prefab");
             if (car != null) mgr.carPrefab = car;
+            // Wire the per-profile prefab pool. The network manager picks one
+            // at random per player on race start. Builds them on the fly so
+            // a Build Main Scene from a fresh project always has the pool.
+            mgr.carPrefabs = Dio.Player.EditorTools.CarPrefabBuilder.BuildAllCarPrefabs();
             var lvl = AssetDatabase.LoadAssetAtPath<LevelData>("Assets/Dio/Levels/DefaultLevel.asset");
             if (lvl != null) mgr.defaultLevel = lvl;
 
@@ -250,6 +261,17 @@ namespace Dio.UI.EditorTools
             // "Did not find target for sync message" warnings.
             mgr.spawnPrefabs.Clear();
             if (car != null) mgr.spawnPrefabs.Add(car);
+            // Each variant car prefab also needs to be registered so Mirror
+            // can resolve them on clients when the server randomly spawns
+            // one. Without this, joining clients see a "Spawn ID not found"
+            // warning and the variant car never appears.
+            if (mgr.carPrefabs != null)
+            {
+                foreach (var cp in mgr.carPrefabs)
+                {
+                    if (cp != null && !mgr.spawnPrefabs.Contains(cp)) mgr.spawnPrefabs.Add(cp);
+                }
+            }
             string[] puPaths = {
                 "Assets/Dio/Prefabs/Powerups/Banana.prefab",
                 "Assets/Dio/Prefabs/Powerups/OilSlick.prefab",
@@ -559,9 +581,38 @@ namespace Dio.UI.EditorTools
             var pickerTitleLE = pickerTitle.gameObject.AddComponent<LayoutElement>();
             pickerTitleLE.preferredHeight = 28; pickerTitleLE.flexibleHeight = 0;
 
-            // Grid stretches to fill remaining vertical space.
-            var grid = new GameObject("LevelGrid", typeof(RectTransform), typeof(GridLayoutGroup));
-            grid.transform.SetParent(pickerPanel.transform, false);
+            // ScrollRect → Viewport (Mask) → Grid content. The grid grows
+            // vertically with N cards (3 columns); ContentSizeFitter puts
+            // its preferred-height on the content rect so the ScrollRect
+            // can clip + scroll when the catalog overflows the picker
+            // panel. Without the scroll wrapper, additional rows used to
+            // bleed past the picker bounds and overlap the buttons row
+            // below.
+            var levelScrollGo = new GameObject("LevelScroll",
+                typeof(RectTransform), typeof(Image), typeof(ScrollRect));
+            levelScrollGo.transform.SetParent(pickerPanel.transform, false);
+            levelScrollGo.GetComponent<Image>().color = new Color(1f, 1f, 1f, 0f); // invisible bg
+            var lsLE = levelScrollGo.AddComponent<LayoutElement>();
+            lsLE.flexibleHeight = 1; lsLE.minHeight = 220;
+
+            var levelViewport = new GameObject("Viewport",
+                typeof(RectTransform), typeof(Image), typeof(Mask));
+            levelViewport.transform.SetParent(levelScrollGo.transform, false);
+            var lvrt = (RectTransform)levelViewport.transform;
+            lvrt.anchorMin = Vector2.zero; lvrt.anchorMax = Vector2.one;
+            lvrt.offsetMin = Vector2.zero; lvrt.offsetMax = Vector2.zero;
+            levelViewport.GetComponent<Image>().color = new Color(1, 1, 1, 0.01f);
+            levelViewport.GetComponent<Mask>().showMaskGraphic = false;
+
+            // Grid is the scroll's content. Top-anchored so cards flow
+            // downward as they're added.
+            var grid = new GameObject("LevelGrid",
+                typeof(RectTransform), typeof(GridLayoutGroup), typeof(ContentSizeFitter));
+            grid.transform.SetParent(levelViewport.transform, false);
+            var gridRT = (RectTransform)grid.transform;
+            gridRT.anchorMin = new Vector2(0, 1); gridRT.anchorMax = new Vector2(1, 1);
+            gridRT.pivot = new Vector2(0.5f, 1);
+            gridRT.sizeDelta = Vector2.zero;
             var glg = grid.GetComponent<GridLayoutGroup>();
             glg.cellSize = new Vector2(220, 130);
             glg.spacing = new Vector2(12, 12);
@@ -571,10 +622,20 @@ namespace Dio.UI.EditorTools
             glg.constraintCount = 3;
             glg.childAlignment = TextAnchor.UpperLeft;
             glg.padding = new RectOffset(4, 4, 4, 4);
-            var glgLe = grid.AddComponent<LayoutElement>();
-            glgLe.flexibleHeight = 1; glgLe.minHeight = 280;
+            var gridFitter = grid.GetComponent<ContentSizeFitter>();
+            gridFitter.horizontalFit = ContentSizeFitter.FitMode.Unconstrained;
+            gridFitter.verticalFit   = ContentSizeFitter.FitMode.PreferredSize;
 
-            // Card template (instantiated by the controller per catalog entry).
+            var levelSR = levelScrollGo.GetComponent<ScrollRect>();
+            levelSR.viewport = lvrt;
+            levelSR.content  = gridRT;
+            levelSR.horizontal = false;
+            levelSR.vertical   = true;
+            levelSR.movementType = ScrollRect.MovementType.Clamped;
+            levelSR.scrollSensitivity = 30f;
+
+            // Card template (instantiated by the controller per catalog
+            // entry, parented onto the grid). Inactive so layout ignores it.
             var levelCard = BuildLevelCardTemplate(grid.transform);
             levelCard.SetActive(false);
 

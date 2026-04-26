@@ -12,7 +12,7 @@ MonoBehaviour:
   m_Script: {fileID: 11500000, guid: 1bc9a7716bc36b04f93b3d69603db1de, type: 3}
   m_Name: Level 7
   m_EditorClassIdentifier: Assembly-CSharp::Dio.Level.LevelData
-  displayName: Level 7
+  displayName: DefaultLevel
   circumference: 1256.6371
   trackRatio: 1
   trackWidth: 15

@@ -48,6 +48,8 @@ namespace Dio.Level.Obstacles
                 RpcSpawnImpactBurst(transform.position, new Color(0.20f, 0.70f, 1f, 1f), 1.0f);
                 ApplyClientImpact(car, transform.position, 9f, 0.8f, 6f);
                 ApplyState(car, new GreenShellBlindState(), blindDuration);
+                if (car.connectionToClient != null)
+                    car.TargetFlashScreen(car.connectionToClient, PowerupKind.GreenShell, blindDuration);
                 ServerDespawn();
                 return;
             }

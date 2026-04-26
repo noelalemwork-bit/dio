@@ -100,9 +100,15 @@ namespace Dio.UI
             yield return WaitUntilNetworkTime(goTime);
 
             // GO! — restore camera lerp + unlock cars + hold the text.
+            // The authoritative OnCountdownEnd is fired by RaceGoMessage
+            // arriving from the server (DioNetworkManager.OnClientRaceGo);
+            // we DON'T fire it here, because each peer reaching this line
+            // at its own NetworkTime convergence point would desync host
+            // and guests. Inputs are unlocked locally for snappy visuals;
+            // physics-side state changes (DioCar's OnCountdownEnd, win
+            // tracking) wait for the server's message.
             if (rc != null) rc.chasePosLerp = runChaseLerp;
             SetAllCarInputsLocked(false);
-            DioNetworkManager.OnCountdownEnd?.Invoke();
             yield return TickPop("GO!", durationSeconds: goHoldSeconds, isGo: true);
 
             HideCountdown();
