@@ -120,3 +120,7 @@ ProjectSettings/ProjectVersion.txt
 
 
 kilo.jsonc
+Assets/Dio/Levels/DefaultLevel.asset
+Assets/Dio/Resources/Globe.prefab
+Assets/Dio/Vehicles/DefaultKart.asset
+ProjectSettings/GraphicsSettings.asset

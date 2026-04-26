@@ -10,9 +10,9 @@ MonoBehaviour:
   m_Enabled: 1
   m_EditorHideFlags: 0
   m_Script: {fileID: 11500000, guid: 1bc9a7716bc36b04f93b3d69603db1de, type: 3}
-  m_Name: DefaultLevel
+  m_Name: Level 7
   m_EditorClassIdentifier: Assembly-CSharp::Dio.Level.LevelData
-  displayName: 
+  displayName: Level 7
   circumference: 1256.6371
   trackRatio: 1
   trackWidth: 15
@@ -20,12 +20,12 @@ MonoBehaviour:
   - directionFromCenter: {x: 0, y: 1, z: 0}
     bank: 0
     inHandle: {x: 0, y: 0, z: 0}
-    outHandle: {x: 0, y: 0, z: 0}
+    outHandle: {x: 0.41452706, y: 0.6985054, z: 0.583316}
     yOffset: 0
-    next: 
-  - directionFromCenter: {x: 0.696526, y: 0.39801487, z: 0.5970223}
+    next: 01000000
+  - directionFromCenter: {x: 0.57909876, y: -0.024180515, z: 0.8148987}
     bank: 0
-    inHandle: {x: 0, y: 0, z: 0}
+    inHandle: {x: 0.41452706, y: 0.6985054, z: 0.583316}
     outHandle: {x: 0, y: 0, z: 0}
     yOffset: 0
     next: 

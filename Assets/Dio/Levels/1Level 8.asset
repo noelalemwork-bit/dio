@@ -1,0 +1,79 @@
+%YAML 1.1
+%TAG !u! tag:unity3d.com,2011:
+--- !u!114 &11400000
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 0}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: 1bc9a7716bc36b04f93b3d69603db1de, type: 3}
+  m_Name: Level 8
+  m_EditorClassIdentifier: Assembly-CSharp::Dio.Level.LevelData
+  displayName: esti
+  circumference: 1256.6371
+  trackRatio: 1
+  trackWidth: 35
+  points:
+  - directionFromCenter: {x: -0.22341308, y: 0.9567416, z: 0.18636571}
+    bank: 0
+    inHandle: {x: 0, y: 0, z: 0}
+    outHandle: {x: -0.49089742, y: 0.8683734, z: 0.07033732}
+    yOffset: 2.1376398
+    next: 01000000
+  - directionFromCenter: {x: -0.8678041, y: 0.49084267, z: 0.07739198}
+    bank: 0
+    inHandle: {x: -0.726797, y: 0.6355481, z: 0.2604703}
+    outHandle: {x: -0.9235956, y: 0.38120067, z: -0.04070935}
+    yOffset: 13.566992
+    next: 02000000
+  - directionFromCenter: {x: -0.98024356, y: -0.12604909, z: -0.15242785}
+    bank: 0
+    inHandle: {x: -0.9901247, y: -0.12658952, z: 0.06023462}
+    outHandle: {x: -0.79908025, y: -0.10434819, z: -0.59209985}
+    yOffset: 15.039005
+    next: 0300000009000000
+  - directionFromCenter: {x: -0.53017, y: 0.2570763, z: -0.8079799}
+    bank: 0
+    inHandle: {x: -0.6698174, y: 0.1140308, z: -0.73371774}
+    outHandle: {x: -0.28258476, y: 0.44479293, z: -0.84988534}
+    yOffset: 21.586021
+    next: 04000000
+  - directionFromCenter: {x: 0.041390937, y: 0.19961008, z: -0.9790008}
+    bank: 0
+    inHandle: {x: -0.15070511, y: -0.40646812, z: -0.90115017}
+    outHandle: {x: 0.13828054, y: 0.49384362, z: -0.8584853}
+    yOffset: 19.57467
+    next: 05000000
+  - directionFromCenter: {x: 0.42100385, y: 0.43103075, z: -0.79810286}
+    bank: 0
+    inHandle: {x: 0.42666477, y: 0.75696325, z: -0.49493822}
+    outHandle: {x: 0.3813329, y: 0.20936672, z: -0.90041703}
+    yOffset: 15.874069
+    next: 06000000
+  - directionFromCenter: {x: 0.7059472, y: 0.06640732, z: -0.7051444}
+    bank: 0
+    inHandle: {x: 0.6488844, y: 0.16555251, z: -0.7426584}
+    outHandle: {x: 0.7738216, y: -0.088360325, z: -0.62721026}
+    yOffset: 17.825783
+    next: 07000000
+  - directionFromCenter: {x: 0.8648385, y: -0.49831364, z: 0.061138336}
+    bank: 0
+    inHandle: {x: 0.8207295, y: -0.57029676, z: -0.034127805}
+    outHandle: {x: 0.9119273, y: -0.24813165, z: 0.32683218}
+    yOffset: 21.937668
+    next: 08000000
+  - directionFromCenter: {x: 0.5101222, y: -0.6743032, z: 0.5339387}
+    bank: 0
+    inHandle: {x: 0.27557757, y: -0.1972049, z: 0.9408333}
+    outHandle: {x: 0.54151857, y: -0.8341462, z: 0.1046792}
+    yOffset: 14.861046
+    next: 09000000
+  - directionFromCenter: {x: 0.45876318, y: -0.8181519, z: -0.34664664}
+    bank: 0
+    inHandle: {x: 0.10287791, y: -0.8834395, z: 0.45711136}
+    outHandle: {x: 0.48728293, y: -0.25978997, z: -0.8337053}
+    yOffset: 21.586021
+    next: 04000000
