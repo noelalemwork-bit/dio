@@ -218,27 +218,51 @@ namespace Dio.Level.EditorTools
                       $"autofit scale={scale:F3}, nominal radius={level.NominalRadius:F1}u");
         }
 
+        // Persistent scratch buffers — TrackBuilder reuses these instead of
+        // allocating fresh `List<>`s on every rebuild. The drag loop hits
+        // this path on every mouse-move, so the GC saving is significant.
+        readonly TrackBuilderScratch _ribbonScratch = new TrackBuilderScratch();
+        readonly TrackBuilderScratch _guardScratch  = new TrackBuilderScratch();
+
         // Rebuild the cached preview track mesh if the level data has changed.
         // Hashing the points list is enough — anchor moves / handle drags /
-        // yOffset edits all touch it.
+        // yOffset edits all touch it. While the user is mid-drag we skip the
+        // (relatively expensive) guard pass and run the ribbon at quarter
+        // resolution; the cheap polyline overlay still reads accurately and
+        // the full mesh refreshes the moment the drag ends.
         void EnsurePreviewTrack()
         {
             if (level == null) { _previewTrackMesh = null; return; }
             int hash = ComputeLevelHash(level);
-            if (_previewTrackMesh != null && hash == _previewLevelHash) return;
+            bool dragging = _dragKind != DragKind.None && _dragKind != DragKind.Orbit;
+            int wantSegments = dragging
+                ? TrackBuilder.EditorPreviewSegmentsPerArc / 2  // ultra-cheap during drag
+                : TrackBuilder.EditorPreviewSegmentsPerArc;
+            // Guards are expensive; only rebuild them when idle. While the
+            // user is dragging, keep showing the previous (stale) guard mesh.
+            // It snaps back into place the moment the mouse releases.
+            if (_previewTrackMesh != null && hash == _previewLevelHash && wantSegments == _previewLevelSegments) return;
 
             _previewLevelHash = hash;
-            _previewTrackMesh = TrackBuilder.Build(level, _raycaster, surfaceLift: 0.05f);
+            _previewLevelSegments = wantSegments;
+            _previewTrackMesh = TrackBuilder.Build(level, _raycaster,
+                surfaceLift: 0.05f,
+                segmentsPerArc: wantSegments,
+                scratch: _ribbonScratch);
 
-            // Outer-skirt-only guards: show the elevation step without
-            // building solid walls that would occlude the track.
-            var guardOpt = TrackBuilder.GuardOptions.Default;
-            guardOpt.crossSection   = TrackBuilder.GuardCrossSection.OuterSkirtOnly;
-            guardOpt.floorAtSurface = true;
-            guardOpt.floorPad       = TrackBuilder.DefaultFloorPad;
-            guardOpt.outwardOffset  = 0.05f;
-            guardOpt.addEndcaps     = false;
-            (_previewGuardLeft, _previewGuardRight) = TrackBuilder.BuildGuards(level, _raycaster, guardOpt);
+            if (!dragging)
+            {
+                var guardOpt = TrackBuilder.GuardOptions.Default;
+                guardOpt.crossSection   = TrackBuilder.GuardCrossSection.OuterSkirtOnly;
+                guardOpt.floorAtSurface = true;
+                guardOpt.floorPad       = TrackBuilder.DefaultFloorPad;
+                guardOpt.outwardOffset  = 0.05f;
+                guardOpt.addEndcaps     = false;
+                (_previewGuardLeft, _previewGuardRight) = TrackBuilder.BuildGuards(
+                    level, _raycaster, guardOpt,
+                    segmentsPerArc: wantSegments,
+                    scratch: _guardScratch);
+            }
 
             if (_previewTrackMat == null)
             {
@@ -253,6 +277,7 @@ namespace Dio.Level.EditorTools
                 _previewGuardMat.color = new Color(0.32f, 0.30f, 0.36f, 1f);
             }
         }
+        int _previewLevelSegments = -1;
 
         static int ComputeLevelHash(LevelData lv)
         {
@@ -475,26 +500,22 @@ namespace Dio.Level.EditorTools
                     case DragKind.OutHandle:
                         if (_draggedIndex >= 0 && PickDirection(e.mousePosition, out Vector3 dirH))
                         {
-                            // Project handle to the tangent plane at the anchor —
-                            // a handle that drifts radially has no useful effect
-                            // on the bezier and visually looks broken. We keep
-                            // the unit direction but slide it onto the great
-                            // circle perpendicular to the radial.
-                            var anchor = level.points[_draggedIndex];
-                            Vector3 anchorDir = anchor.directionFromCenter.sqrMagnitude > 1e-6f
-                                ? anchor.directionFromCenter.normalized : Vector3.up;
-                            Vector3 tan = dirH - Vector3.Dot(dirH, anchorDir) * anchorDir;
-                            if (tan.sqrMagnitude > 1e-8f)
-                            {
-                                // Mix anchor radial component (small) with
-                                // tangent plane projection (dominant). The
-                                // resulting normalized vector is still a unit
-                                // direction "near" the anchor on the unit
-                                // sphere, but constrained to vary only in the
-                                // tangent plane — which is the bezier-meaningful
-                                // axis.
-                                dirH = (anchorDir + tan.normalized * 0.6f).normalized;
-                            }
+                            // Direct cursor-to-sphere projection. PickDirection
+                            // already returns a unit direction (mesh hit
+                            // normalised, or the great-circle approach if the
+                            // cursor's in empty space), so the handle dot
+                            // tracks the cursor 1:1 around the planet — same
+                            // way an anchor drag does.
+                            //
+                            // The handle stores ONLY the polar direction;
+                            // its rendered Y comes from the anchor's
+                            // resolved height (see CachedAnchorHeight). So
+                            // dragging rotates the handle around the
+                            // trackpoint without ever needing a radial
+                            // bias mix to keep it "close" — the height is
+                            // re-applied at render time. C1 partner
+                            // reflection still runs to keep the opposite
+                            // handle in sync.
                             SetHandle(_draggedIndex, _dragKind, dirH);
                             ReflectPartnerHandle(_draggedIndex, _dragKind);
                             Save(); Repaint();
@@ -513,10 +534,10 @@ namespace Dio.Level.EditorTools
                         if (_draggedIndex >= 0 && _forkSourceIdx >= 0 && PickDirection(e.mousePosition, out Vector3 dirF))
                         {
                             SetAnchorDirOnly(_draggedIndex, dirF);
-                            // Recompute only the NEW point's inHandle; the
-                            // source's outHandle is shared with its original
-                            // outgoing edge and must not be touched.
-                            UpdateForkInHandle(_forkSourceIdx, _draggedIndex);
+                            // The clone keeps the source's handles verbatim;
+                            // dragging it doesn't reset them. Visual continuity
+                            // is preserved because every connection the source
+                            // had now also exists from / to the clone.
                             Save(); Repaint();
                         }
                         break;
@@ -540,49 +561,56 @@ namespace Dio.Level.EditorTools
         // The source's outHandle is REUSED (shared) by the new edge — that's
         // the user-spec'd "control points shared between original and new".
         // The new clone is a leaf (no outgoing) until the user wires it up.
+        // Right-click drag on a non-endpoint anchor creates a PARALLEL branch
+        // through a clone of that anchor. The clone duplicates the source's
+        // entire topology (handles + incoming + outgoing connections) so
+        // dragging it produces a parallel path that diverges and rejoins
+        // cleanly — no graph-breaking, no orphans, no leaves left behind.
+        //
+        // Concretely: if `B → source → C` exists, we end up with both
+        // `B → source → C` and `B → clone → C`. As the user drags the clone
+        // it pulls one of those parallel paths into a new shape; the source
+        // stays put on the original line.
         void BeginForkFromAnchor(int sourceIdx, Vector2 mouse)
         {
             Undo.RecordObject(level, "Fork Track");
             var source = level.points[sourceIdx];
+
+            // Clone every field — handles AND outgoing edges are copied so
+            // the clone reaches every downstream the source reaches.
             var clone = new TrackPoint
             {
                 directionFromCenter = source.directionFromCenter,
                 yOffset = source.yOffset,
                 bank = source.bank,
-                inHandle = Vector3.zero,
-                outHandle = Vector3.zero,
-                next = new List<int>(),
+                inHandle = source.inHandle,
+                outHandle = source.outHandle,
+                next = source.next != null ? new List<int>(source.next) : new List<int>(),
             };
             int newIdx = level.points.Count;
             level.points.Add(clone);
 
-            var src = level.points[sourceIdx];
-            if (src.next == null) src.next = new List<int>();
-            src.next.Add(newIdx);
-            level.points[sourceIdx] = src;
+            // Mirror INCOMING connections too — every anchor that pointed to
+            // `source` now also points to `clone`, so the clone is reachable
+            // from upstream without breaking the existing chain.
+            for (int i = 0; i < newIdx; i++)
+            {
+                var p = level.points[i];
+                if (p.next == null) continue;
+                if (p.next.Contains(sourceIdx) && !p.next.Contains(newIdx))
+                {
+                    p.next.Add(newIdx);
+                    level.points[i] = p;
+                }
+            }
 
             _dragKind = DragKind.Fork;
             _draggedIndex = newIdx;
             _forkSourceIdx = sourceIdx;
 
             if (PickDirection(mouse, out Vector3 dir))
-            {
                 SetAnchorDirOnly(newIdx, dir);
-                UpdateForkInHandle(sourceIdx, newIdx);
-            }
             Save();
-        }
-
-        // Set the new (forked) anchor's inHandle to the geodesic midpoint
-        // between source and new — keeps the new edge near-geodesic without
-        // requiring the artist to wire up handles immediately.
-        void UpdateForkInHandle(int sourceIdx, int newIdx)
-        {
-            Vector3 A = level.DirOf(sourceIdx);
-            Vector3 B = level.DirOf(newIdx);
-            var nw = level.points[newIdx];
-            nw.inHandle = Vector3.Slerp(A, B, 2f / 3f).normalized;
-            level.points[newIdx] = nw;
         }
 
         struct Pick { public DragKind kind; public int index; }

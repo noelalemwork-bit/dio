@@ -12,44 +12,26 @@ MonoBehaviour:
   m_Script: {fileID: 11500000, guid: 1bc9a7716bc36b04f93b3d69603db1de, type: 3}
   m_Name: Level 5
   m_EditorClassIdentifier: Assembly-CSharp::Dio.Level.LevelData
-  displayName: 
+  displayName: 1 game
   circumference: 1256.6371
   trackRatio: 1
   trackWidth: 15
   points:
-  - directionFromCenter: {x: 0.1367714, y: 0.52402264, z: -0.84065086}
+  - directionFromCenter: {x: 0.96302706, y: -0.07666535, z: 0.25826585}
     bank: 0
     inHandle: {x: 0, y: 0, z: 0}
-    outHandle: {x: 0.6710821, y: -0.26948756, z: -0.69067025}
-    yOffset: 0
+    outHandle: {x: 0.9643337, y: 0.060362384, z: -0.25771463}
+    yOffset: 12.003877
     next: 01000000
-  - directionFromCenter: {x: 0.7878059, y: -0.15845008, z: -0.5951936}
+  - directionFromCenter: {x: -0.96494704, y: -0.08762158, z: 0.24738562}
     bank: 0
-    inHandle: {x: 0.82253253, y: 0.35295218, z: -0.44594288}
-    outHandle: {x: 0.52854353, y: -0.6246919, z: -0.57480586}
-    yOffset: 8.195174
-    next: 02000000030000000400000005000000
-  - directionFromCenter: {x: 0.031471312, y: -0.9980092, z: -0.054656025}
+    inHandle: {x: -0.93994856, y: -0.20730853, z: -0.27114567}
+    outHandle: {x: -0.71606994, y: 0.05693441, z: 0.6957028}
+    yOffset: 54.740017
+    next: 02000000
+  - directionFromCenter: {x: -0.01580439, y: -0.57559127, z: -0.8175848}
     bank: 0
-    inHandle: {x: -0.23348036, y: -0.9696165, z: 0.07301215}
-    outHandle: {x: 0.4100064, y: -0.882384, z: -0.23085347}
-    yOffset: 7.9284024
-    next: 03000000
-  - directionFromCenter: {x: 0.7630393, y: -0.6463095, z: 0.007422254}
-    bank: 0
-    inHandle: {x: 0.33101824, y: -0.93721086, z: -0.109830745}
-    outHandle: {x: 0.90212303, y: -0.42625698, z: 0.0669258}
-    yOffset: 8.195174
-    next: 04000000
-  - directionFromCenter: {x: 0.9646975, y: -0.16377436, z: -0.20624427}
-    bank: 0
-    inHandle: {x: 0.97027606, y: -0.16361247, z: -0.17831236}
-    outHandle: {x: 0.7193779, y: -0.14215958, z: -0.6799163}
-    yOffset: 8.195174
-    next: 05000000
-  - directionFromCenter: {x: 0.40089795, y: -0.11417022, z: -0.9089807}
-    bank: 0
-    inHandle: {x: 0.40426055, y: -0.120863155, z: -0.9066232}
+    inHandle: {x: -0.6778508, y: -0.35591716, z: -0.64330494}
     outHandle: {x: 0, y: 0, z: 0}
-    yOffset: 8.195174
+    yOffset: 54.740017
     next: 
