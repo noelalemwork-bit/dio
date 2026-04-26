@@ -14,13 +14,16 @@ namespace Dio.Level
     /// and additive (bump a version field, extend the reader/writer).
     public static class LevelDataNetworkExtensions
     {
-        const byte WireVersion = 1;
+        // Wire bumped to 3: per-anchor `guardRailFloating` flag (controls the
+        // skirt of every outgoing bezier — short floating rail vs. full skirt
+        // down to the planet surface).
+        const byte WireVersion = 3;
 
         public static void WriteLevelData(this NetworkWriter writer, LevelData level)
         {
             if (level == null) { writer.WriteByte(0); return; }
             writer.WriteByte(WireVersion);
-            writer.WriteString(level.displayName ?? string.Empty);
+            writer.WriteString(level != null ? (level.name ?? string.Empty) : string.Empty);
             writer.WriteFloat(level.circumference);
             writer.WriteFloat(level.trackRatio);
             writer.WriteFloat(level.trackWidth);
@@ -35,6 +38,7 @@ namespace Dio.Level
                 writer.WriteVector3(p.inHandle);
                 writer.WriteVector3(p.outHandle);
                 writer.WriteFloat(p.yOffset);
+                writer.WriteBool(p.guardRailFloating);
                 int edges = p.next != null ? p.next.Count : 0;
                 writer.WriteInt(edges);
                 for (int k = 0; k < edges; k++) writer.WriteInt(p.next[k]);
@@ -51,7 +55,9 @@ namespace Dio.Level
                 return null;
             }
             var level = ScriptableObject.CreateInstance<LevelData>();
-            level.displayName = reader.ReadString();
+            // Stamp the loaded ScriptableObject's runtime name from the
+            // wire payload — that's what every catalog key + lookup uses.
+            level.name = reader.ReadString();
             level.circumference = reader.ReadFloat();
             level.trackRatio = reader.ReadFloat();
             level.trackWidth = reader.ReadFloat();
@@ -66,6 +72,7 @@ namespace Dio.Level
                 p.inHandle = reader.ReadVector3();
                 p.outHandle = reader.ReadVector3();
                 p.yOffset = reader.ReadFloat();
+                p.guardRailFloating = reader.ReadBool();
                 int edges = reader.ReadInt();
                 p.next = new List<int>(edges);
                 for (int k = 0; k < edges; k++) p.next.Add(reader.ReadInt());

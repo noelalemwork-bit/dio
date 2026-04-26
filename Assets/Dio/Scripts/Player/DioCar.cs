@@ -37,6 +37,17 @@ namespace Dio.Player
         [SyncVar(hook = nameof(OnColorChanged))] public int colorIndex;
         [SyncVar] public string ownerName = "";
 
+        // Vehicle profile identity — the source asset's FILENAME (e.g.
+        // "KenneyKart"). Server picks a random filename at spawn from its
+        // local Resources/Vehicles/ scan and broadcasts via SyncVar. Each
+        // peer looks the name up in its OWN scan and applies the matching
+        // profile. Filename-based sync sidesteps array-index drift between
+        // machines (different sort outcomes if one peer is missing a
+        // profile) and .meta GUID divergence (different builds inevitably
+        // assign different GUIDs to the same logical asset). Empty =
+        // unassigned / use baseline prefab look.
+        [SyncVar(hook = nameof(OnProfileNameChanged))] public string profileName = "";
+
         // Server-set during DioNetworkManager.Update; arc-length the car has
         // traveled along the track. Used by the HUD position panel + win
         // detection. Server-to-client because the server is the only writer.
@@ -213,7 +224,24 @@ namespace Dio.Player
         {
             ApplyColor(colorIndex);
             ConfigureRigidbodyForRole();
-            Debug.Log($"[DioCar] OnStartClient netId={netId} isServer={isServer} isOwned={isOwned} kinematic={_rb.isKinematic} readLocalInput={_car.readLocalInput}");
+            // Apply the assigned profile if one was already synced (the
+            // hook below ALSO fires on the SyncVar change — both paths are
+            // idempotent).
+            if (!string.IsNullOrEmpty(profileName)) ApplyProfile(profileName);
+            Debug.Log($"[DioCar] OnStartClient netId={netId} isServer={isServer} isOwned={isOwned} kinematic={_rb.isKinematic} profileName='{profileName}' readLocalInput={_car.readLocalInput}");
+        }
+
+        void OnProfileNameChanged(string _, string newName)
+        {
+            if (string.IsNullOrEmpty(newName)) return;
+            ApplyProfile(newName);
+        }
+
+        void ApplyProfile(string name)
+        {
+            var p = VehicleProfileApplicator.GetByName(name);
+            if (p != null)
+                VehicleProfileApplicator.Apply(gameObject, p);
         }
 
         // Mirror calls this when this peer is given authority. For player

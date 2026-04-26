@@ -10,22 +10,21 @@ namespace Dio.Level
     /// AssetDatabase under `Assets/Dio/Levels/`; built players use
     /// `Resources.LoadAll<LevelData>("Levels")`. Either way the result is
     /// the SAME set of LevelData instances — one entry per asset on disk,
-    /// keyed by their `displayName` (auto-filled from the file name when
-    /// the field is empty).
+    /// keyed by the asset's FILENAME (`level.name`).
     ///
-    /// This is intentionally read-at-runtime, not baked into a prefab at
-    /// build-menu time. Restarting the editor / hot-reloading the player
-    /// picks up new levels without rerunning a build step.
+    /// Filename keying is the cross-machine identity — `.meta` GUIDs and
+    /// runtime array indexes both diverge between machines, but filenames
+    /// don't (they're version-controlled and persisted). Lobby code keys
+    /// the runtime catalog by (ownerConnId, level.name); designers rename
+    /// a level by renaming the asset file in the project view.
     public static class LevelLibrary
     {
         const string LevelsAssetFolder = "Assets/Dio/Levels";
         const string LevelsResourcesFolder = "Levels";
 
         /// Scan and return every LevelData visible to the local peer. Each
-        /// asset is returned ONCE; ordering is alphabetical by displayName
-        /// for stable lobby UI. The displayName is normalised (file name
-        /// fallback) before being returned so callers never see empty
-        /// strings.
+        /// asset is returned ONCE; ordering is alphabetical by asset
+        /// filename for stable lobby UI.
         public static List<LevelData> ScanLocal()
         {
             var list = new List<LevelData>();
@@ -43,41 +42,31 @@ namespace Dio.Level
             list.AddRange(loaded);
 #endif
 
-            for (int i = 0; i < list.Count; i++) NormaliseDisplayName(list[i]);
-            list.Sort((a, b) => string.Compare(
-                string.IsNullOrEmpty(a.displayName) ? a.name : a.displayName,
-                string.IsNullOrEmpty(b.displayName) ? b.name : b.displayName,
-                System.StringComparison.OrdinalIgnoreCase));
+            list.Sort((a, b) => string.Compare(a.name, b.name, System.StringComparison.OrdinalIgnoreCase));
             return list;
         }
 
-        /// Editor uniqueness check: returns true when `candidate`'s
-        /// displayName collides with another LevelData asset's displayName
-        /// (case-insensitive). The level being saved is excluded from the
-        /// comparison so saving an already-named level doesn't self-conflict.
-        public static bool IsDisplayNameTaken(LevelData candidate, string proposedName)
+        /// Editor uniqueness check on a proposed asset filename. Excludes
+        /// the level being renamed so renaming an existing level to its
+        /// own name isn't reported as a clash.
+        public static bool IsNameTaken(LevelData candidate, string proposedName)
         {
             if (string.IsNullOrWhiteSpace(proposedName)) return false;
             var others = ScanLocal();
             for (int i = 0; i < others.Count; i++)
             {
                 if (others[i] == candidate) continue;
-                string n = string.IsNullOrEmpty(others[i].displayName) ? others[i].name : others[i].displayName;
-                if (string.Equals(n, proposedName, System.StringComparison.OrdinalIgnoreCase))
+                if (string.Equals(others[i].name, proposedName, System.StringComparison.OrdinalIgnoreCase))
                     return true;
             }
             return false;
         }
 
-        /// Auto-fill displayName from the asset's file name when missing.
-        /// Lets old levels (saved before the field existed) round-trip
-        /// through the network catalog without designers having to set the
-        /// name explicitly.
-        public static void NormaliseDisplayName(LevelData lvl)
-        {
-            if (lvl == null) return;
-            if (!string.IsNullOrWhiteSpace(lvl.displayName)) return;
-            lvl.displayName = lvl.name; // ScriptableObject.name = file name in editor
-        }
+        // Backwards-compat helpers for older call sites. NormaliseDisplayName
+        // is now a no-op; IsDisplayNameTaken just routes to the filename
+        // check. Both will be removed once all referrers are migrated.
+        public static void NormaliseDisplayName(LevelData lvl) { /* no-op */ }
+        public static bool IsDisplayNameTaken(LevelData candidate, string proposedName)
+            => IsNameTaken(candidate, proposedName);
     }
 }

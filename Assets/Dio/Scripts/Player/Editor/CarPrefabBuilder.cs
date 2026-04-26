@@ -18,10 +18,20 @@ namespace Dio.Player.EditorTools
     ///     and its bottom at y = 0.
     public static class CarPrefabBuilder
     {
-        const string PrefabsDir   = "Assets/Dio/Prefabs";
-        const string CarsDir      = "Assets/Dio/Prefabs/Cars";
-        const string MaterialsDir = "Assets/Dio/Prefabs/Materials";
-        const string ProfilesDir  = "Assets/Dio/Vehicles";
+        // _Generated/ is gitignored. Everything authored by build menus
+        // lives there so two machines never end up with conflicting .meta
+        // GUIDs for the same logical asset (which used to break Mirror's
+        // assetId lookup at race start).
+        const string GeneratedRoot = "Assets/Dio/_Generated";
+        const string PrefabsDir   = "Assets/Dio/Prefabs";  // committed: Car.prefab base only
+        const string CarsDir      = GeneratedRoot + "/Prefabs/Cars";
+        const string MaterialsDir = GeneratedRoot + "/Prefabs/Materials";
+        // Profiles live under a Resources/ folder so they're loadable at
+        // runtime by every peer in a multiplayer session — sync is by
+        // ASSET FILENAME, never by index/guid.
+        const string ProfilesDir       = GeneratedRoot + "/Resources/Vehicles";
+        const string LegacyProfilesDir = "Assets/Dio/Vehicles";
+        const string LegacyResourcesDir = "Assets/Dio/Resources/Vehicles";
         // Default path used when no profile is supplied — kept stable for any
         // legacy code that still references DioNetworkManager.carPrefab.
         const string CarPrefabPath = PrefabsDir + "/Car.prefab";
@@ -54,7 +64,11 @@ namespace Dio.Player.EditorTools
         public static VehicleProfile[] LoadAllProfiles()
         {
             EnsureDir(ProfilesDir);
-            var guids = AssetDatabase.FindAssets("t:VehicleProfile", new[] { ProfilesDir });
+            // Scan only the active _Generated/Resources/Vehicles location.
+            // Legacy folders are wiped by the author tool, so anything found
+            // in them is stale and shouldn't influence the prefab build.
+            var search = new[] { ProfilesDir };
+            var guids = AssetDatabase.FindAssets("t:VehicleProfile", search);
             var paths = new System.Collections.Generic.List<string>(guids.Length);
             foreach (var g in guids) paths.Add(AssetDatabase.GUIDToAssetPath(g));
             paths.Sort(); // deterministic order
@@ -67,27 +81,20 @@ namespace Dio.Player.EditorTools
             return list.ToArray();
         }
 
-        // Resolve the per-profile prefab path. Slashes / spaces in
-        // displayName are sanitised; the asset filename is what shows up in
-        // the project view.
+        // Resolve the per-profile prefab path using the profile's ASSET
+        // FILENAME (`profile.name`). Asset filenames are stable across
+        // machines and re-builds — there's no array-index ambiguity, no
+        // displayName drift. `Car_KenneyKart.prefab` is the same prefab
+        // whether you author on the host's machine or a guest's.
         public static string CarPathFor(VehicleProfile profile)
         {
-            string slug = SanitizeSlug(profile.displayName);
-            if (string.IsNullOrEmpty(slug)) slug = profile.name;
+            string slug = profile != null ? profile.name : "Unknown";
             return $"{CarsDir}/Car_{slug}.prefab";
         }
 
-        static string SanitizeSlug(string s)
-        {
-            if (string.IsNullOrEmpty(s)) return "";
-            var sb = new System.Text.StringBuilder(s.Length);
-            foreach (var c in s)
-            {
-                if (char.IsLetterOrDigit(c)) sb.Append(c);
-                else if (c == ' ' || c == '_' || c == '-') sb.Append('_');
-            }
-            return sb.ToString();
-        }
+        // (No longer used — prefab paths key off profile.name, which is
+        // already a clean asset filename. Kept here for historical context;
+        // safe to remove on a future cleanup pass.)
 
         public static GameObject BuildCarPrefab(VehicleProfile profile)
             => BuildCarPrefab(profile, CarPrefabPath);
@@ -98,7 +105,7 @@ namespace Dio.Player.EditorTools
             EnsureDir(MaterialsDir);
             if (profile == null) profile = GetOrCreateDefaultProfile();
 
-            var root = new GameObject(string.IsNullOrEmpty(profile.displayName) ? "Car" : profile.displayName);
+            var root = new GameObject(string.IsNullOrEmpty(profile.name) ? "Car" : profile.name);
 
             // -- Rigidbody --
             var rb = root.AddComponent<Rigidbody>();
@@ -162,6 +169,11 @@ namespace Dio.Player.EditorTools
             // if the car drops below the planet surface or launches off
             // into space. Runs only on the owner; remote peers ignore it.
             root.AddComponent<OffRoadRespawn>();
+            // Owner-side: 2-second timer that snaps a car off the track edge
+            // back to the last crossed checkpoint at zero speed, oriented
+            // along the next outgoing edge. The lower guard rails make
+            // falling off a real risk — this keeps the failure forgiving.
+            root.AddComponent<OffTrackRespawn>();
 
             // -- Boost trail (visual fx) --
             // Two short streamers behind the rear wheels; emitting is toggled
@@ -178,12 +190,20 @@ namespace Dio.Player.EditorTools
             rightSync.trail = trailRight;
 
             // -- Save prefab --
+            // CRITICAL: do NOT delete first. SaveAsPrefabAsset overwrites
+            // an existing prefab IN PLACE, preserving its asset GUID and
+            // therefore its Mirror assetId. Deleting + recreating mints a
+            // fresh GUID every rebuild, which invalidates every scene
+            // reference + every connected peer's spawnPrefabs list — that
+            // was producing the "Failed to spawn server object, did you
+            // forget to add it to the NetworkManager? assetId=…" errors at
+            // race start when a client built before the latest rebuild
+            // tried to instantiate a freshly-stamped GUID.
             EnsureDir(System.IO.Path.GetDirectoryName(outputPath).Replace('\\', '/'));
-            if (File.Exists(outputPath)) AssetDatabase.DeleteAsset(outputPath);
             var prefab = PrefabUtility.SaveAsPrefabAsset(root, outputPath);
             Object.DestroyImmediate(root);
 
-            Debug.Log($"[Dio] Built car prefab '{profile.displayName}' at {outputPath}");
+            Debug.Log($"[Dio] Built car prefab '{profile.name}' at {outputPath}");
             return prefab;
         }
 
@@ -403,7 +423,8 @@ namespace Dio.Player.EditorTools
             var existing = AssetDatabase.LoadAssetAtPath<VehicleProfile>(DefaultProfilePath);
             if (existing != null) return existing;
             var p = ScriptableObject.CreateInstance<VehicleProfile>();
-            p.displayName = "Default Kart";
+            // Default profile name = filename slug. No displayName field
+            // anymore — the asset filename IS the identity.
             AssetDatabase.CreateAsset(p, DefaultProfilePath);
             AssetDatabase.SaveAssets();
             return p;

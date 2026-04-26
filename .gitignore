@@ -120,3 +120,13 @@ ProjectSettings/ProjectVersion.txt
 
 
 kilo.jsonc
+# -----------------------------------------------------------------------------
+# Dio: editor-script-generated assets. Anything under _Generated/ is
+# rebuildable from the source (VehicleProfile authoring tools, prefab builders,
+# etc.) — keeping it out of git removes the whole class of "two machines have
+# different .meta GUIDs for the same logical prefab → Mirror assetId mismatch
+# at race start" bugs. Just run the appropriate Tools/Dio/Build/* menu on each
+# machine after pulling.
+# -----------------------------------------------------------------------------
+Assets/Dio/_Generated/
+Assets/Dio/_Generated.meta

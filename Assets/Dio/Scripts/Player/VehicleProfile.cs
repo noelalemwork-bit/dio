@@ -15,8 +15,11 @@ namespace Dio.Player
     [CreateAssetMenu(menuName = "Dio/Vehicle Profile", fileName = "VehicleProfile")]
     public class VehicleProfile : ScriptableObject
     {
-        [Header("Identity")]
-        public string displayName = "Default Kart";
+        // Identity is the ASSET FILENAME (`profile.name`). No displayName
+        // field — every machine resolves a profile by filename and is
+        // therefore guaranteed to look up the same content regardless of
+        // .meta GUID or array order. See VehicleProfileApplicator for how
+        // sync uses `profile.name` directly.
 
         [Header("Body (mesh + extra collider hull)")]
         public Mesh bodyMesh;                 // null → primitive Cube

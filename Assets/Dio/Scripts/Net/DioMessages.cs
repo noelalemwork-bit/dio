@@ -19,14 +19,18 @@ namespace Dio.Net
 
     public struct RaceStartMessage : NetworkMessage
     {
-        // The level is identified by (ownerConnId, displayName) — every peer
-        // already received the full payload via PlayerLevelManifestEntry, so
-        // the message just names the chosen one. ownerConnId is the host's
+        // The level is identified by (ownerConnId, asset filename) — every
+        // peer already received the full payload via the manifest, so the
+        // message just names the chosen one. ownerConnId is the host's
         // own connection id when the host's level was picked.
         public int    levelOwnerConnId;
-        public string levelDisplayName;
+        public string levelDisplayName; // wire field name kept; carries asset filename
         public int    seed;
         public double startServerTime;
+        // Index into Dio.Common.SkyboxLibrary. The server rolls this once per
+        // race so every peer renders the same sky. Out-of-range values are
+        // clamped at the receiver, so older builds remain message-compatible.
+        public int    skyboxIndex;
 
         // Embedded full payload as a fallback. Useful when a late-joining
         // client hasn't received the manifest entry yet, or when an asset
@@ -59,10 +63,11 @@ namespace Dio.Net
     //
     // Each peer scans its own local LevelData assets (via LevelLibrary) and
     // uploads them to the server. The server stores everything keyed by
-    // (ownerConnId, displayName) and broadcasts the aggregated manifest to
-    // every peer so the lobby UI can list every level brought into the room
-    // — host's plus every guest's. When a peer disconnects the server
-    // removes their entries and rebroadcasts.
+    // (ownerConnId, asset filename) and broadcasts the aggregated manifest
+    // to every peer so the lobby UI can list every level brought into the
+    // room — host's plus every guest's. Filename keying gives every
+    // machine the same identity for the same asset (no .meta GUID drift).
+    // When a peer disconnects the server removes their entries.
 
     /// Client → server. One message per local level.
     public struct PlayerLevelUploadMessage : NetworkMessage

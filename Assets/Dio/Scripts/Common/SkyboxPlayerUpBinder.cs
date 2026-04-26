@@ -22,6 +22,7 @@ namespace Dio.Common
         static readonly int PlayerUpGlobalId = Shader.PropertyToID("_PlayerUp");
 
         Material _runtimeMat;
+        Material _sourceMat;
         Vector3 _currentUp = Vector3.up;
         bool _materialOwned;
 
@@ -37,14 +38,25 @@ namespace Dio.Common
                 Object.Destroy(_runtimeMat);
             }
             _runtimeMat = null;
+            _sourceMat = null;
             _materialOwned = false;
         }
 
         void EnsureRuntimeMaterial()
         {
-            if (_runtimeMat != null) return;
             var shared = RenderSettings.skybox;
-            if (shared == null) return;
+            if (shared == null) { ReleaseRuntimeMaterial(); return; }
+
+            // If RenderSettings.skybox already IS our runtime clone, nothing to do.
+            if (shared == _runtimeMat) return;
+
+            // Different source asset (race-to-race skybox switch). Drop the old
+            // clone and rebuild from the new source so the new visual takes effect.
+            if (_sourceMat != shared)
+            {
+                ReleaseRuntimeMaterial();
+                _sourceMat = shared;
+            }
 
             // If the shader doesn't declare _PlayerUp, no point cloning — saves a material allocation.
             if (!shared.HasProperty(upPropertyName)) return;

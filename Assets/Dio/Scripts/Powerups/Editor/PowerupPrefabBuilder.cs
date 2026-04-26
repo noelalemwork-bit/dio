@@ -120,7 +120,11 @@ namespace Dio.Powerups.EditorTools
         static GameObject SaveAndDestroy(GameObject go, string assetName)
         {
             var path = $"{PrefabsDir}/{assetName}.prefab";
-            if (File.Exists(path)) AssetDatabase.DeleteAsset(path);
+            // SaveAsPrefabAsset overwrites in place when `path` already
+            // exists — preserving the asset GUID + Mirror assetId. Delete-
+            // then-save would mint a fresh GUID every rebuild and break
+            // every running client whose spawnPrefabs list still points
+            // at the old GUID (race-time "Failed to spawn server object").
             var prefab = PrefabUtility.SaveAsPrefabAsset(go, path);
             Object.DestroyImmediate(go);
             return prefab;

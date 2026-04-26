@@ -136,8 +136,7 @@ namespace Dio.Net
             {
                 var lvl = hostLibrary[i];
                 if (lvl == null || !lvl.HasMinimum) continue;
-                Dio.Level.LevelLibrary.NormaliseDisplayName(lvl);
-                _runtimeCatalog[(-1, lvl.displayName)] = lvl;
+                _runtimeCatalog[(-1, lvl.name)] = lvl;
             }
             BroadcastManifest();
         }
@@ -174,8 +173,10 @@ namespace Dio.Net
         void OnServerLevelUpload(NetworkConnectionToClient conn, PlayerLevelUploadMessage msg)
         {
             if (msg.level == null) return;
-            Dio.Level.LevelLibrary.NormaliseDisplayName(msg.level);
-            string n = string.IsNullOrEmpty(msg.level.displayName) ? "(unnamed)" : msg.level.displayName;
+            // Catalog key is (connId, asset filename). Filenames are
+            // stable across machines because they're version-controlled —
+            // unlike .meta GUIDs and runtime array indexes.
+            string n = string.IsNullOrEmpty(msg.level.name) ? "(unnamed)" : msg.level.name;
             _runtimeCatalog[(conn.connectionId, n)] = msg.level;
             // Promote any "pre-connection host upload" rows (key -1) onto the
             // host's actual connection id once the server's local NetworkClient
@@ -330,14 +331,13 @@ namespace Dio.Net
                 return;
             }
 
-            // Identify the chosen level by (ownerConnId, displayName) and
-            // include the FULL serialized payload as well — every client
-            // builds their visual scene directly from the message instead
-            // of relying on a local-asset lookup that may be missing or
-            // stale. ownerConnId is the runtime-catalog key, not a Mirror
-            // connection field — we look it up via the runtime catalog.
+            // Identify the chosen level by (ownerConnId, asset filename)
+            // and include the FULL serialized payload as well — every
+            // client builds their visual scene directly from the message
+            // instead of relying on a local-asset lookup that may be
+            // missing or stale.
             int ownerConnId = -1;
-            string ownerKeyName = _activeLevel.displayName ?? string.Empty;
+            string ownerKeyName = _activeLevel.name ?? string.Empty;
             foreach (var kv in _runtimeCatalog)
             {
                 if (kv.Value == _activeLevel) { ownerConnId = kv.Key.conn; ownerKeyName = kv.Key.name; break; }
@@ -353,6 +353,10 @@ namespace Dio.Net
                 // camera in + run the 3-2-1-GO! countdown. RaceIntro on each
                 // peer locks inputs locally until startServerTime.
                 startServerTime = NetworkTime.time + 4.0,
+                // Roll a fresh skybox per race. Every peer reads this on
+                // receipt and swaps RenderSettings.skybox to the matching
+                // library entry, so the host and all clients see the same sky.
+                skyboxIndex = Random.Range(0, Dio.Common.SkyboxLibrary.Count),
             };
 
             Debug.Log($"[Dio] ServerStartRace level='{_activeLevel.name}' (display='{ownerKeyName}', owner={ownerConnId})");
@@ -432,14 +436,21 @@ namespace Dio.Net
                 ComputeStartTransform(lvl, raycaster, i, total, out Vector3 pos, out Quaternion rot);
                 Debug.Log($"[Dio] Spawning car slot={i}/{total} pos={pos} fwd={rot * Vector3.forward} up={rot * Vector3.up}");
 
-                var prefab = carPrefabs != null && carPrefabs.Length > 0 ? carPrefabs[Random.Range(0, carPrefabs.Length)] : carPrefab;
-                var carGo = Instantiate(prefab, pos, rot);
+                // Always spawn the SAME Car prefab. Variant looks come from
+                // a SyncVar profileIndex applied at runtime by each peer
+                // through VehicleProfileApplicator. This keeps Mirror's
+                // assetId stable across different machines (where prefab
+                // GUIDs naturally diverge) — without this, joined clients
+                // hit "Failed to spawn server object, did you forget to
+                // add it to the NetworkManager? assetId=…" at race start.
+                var carGo = Instantiate(carPrefab, pos, rot);
                 NetworkServer.Spawn(carGo, conn);
 
                 var car = carGo.GetComponent<DioCar>();
                 if (car != null && player != null) car.ServerInitialize(player);
                 if (car != null)
                 {
+                    car.profileName = Dio.Player.VehicleProfileApplicator.PickRandomName();
                     car.ServerResetCheckpoints();
                     car.ServerCheckpointHit(0); // crossing the start anchor (x=1 at lights-out)
                     car.checkpointsToFinishY = car.CrossedCount + initialRemaining;
@@ -453,18 +464,24 @@ namespace Dio.Net
             {
                 ComputeStartTransform(lvl, raycaster, 0, 1, out var pos, out var rot);
                 Debug.Log($"[Dio] Solo-bypass spawn pos={pos} fwd={rot * Vector3.forward} up={rot * Vector3.up}");
-                var prefab = carPrefabs != null && carPrefabs.Length > 0 ? carPrefabs[Random.Range(0, carPrefabs.Length)] : carPrefab;
-                var carGo = Instantiate(prefab, pos, rot);
+                // Same prefab for everyone — see comment in the per-player
+                // loop above. Variant look is set via SyncVar profileIndex.
+                var carGo = Instantiate(carPrefab, pos, rot);
                 NetworkServer.Spawn(carGo);
                 var soloCar = carGo.GetComponent<DioCar>();
                 if (soloCar != null)
                 {
+                    soloCar.profileName = Dio.Player.VehicleProfileApplicator.PickRandomName();
                     soloCar.ServerResetCheckpoints();
                     soloCar.ServerCheckpointHit(0);
                     soloCar.checkpointsToFinishY = soloCar.CrossedCount + initialRemaining;
                 }
             }
         }
+
+        // (Profile selection lives in VehicleProfileApplicator.PickRandomName —
+        // it returns a stable asset filename, not an array index, so cross-
+        // machine sync stays correct even when one peer is missing a profile.)
 
         // For every edge in the track graph, drop one row of 5 mystery boxes
         // across the track at that edge's local midpoint. Each row uses a

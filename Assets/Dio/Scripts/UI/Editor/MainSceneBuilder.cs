@@ -30,6 +30,15 @@ namespace Dio.UI.EditorTools
         const string ShadersDir = DioRoot + "/Shaders";
         const string SkyboxMaterialPath = ShadersDir + "/SunsetSky.mat";
         const string SkyboxShaderPath = ShadersDir + "/SunsetSky.shader";
+        const string CartoonSkyShaderPath = ShadersDir + "/CartoonSky.shader";
+        // Sky materials are generated; output to the gitignored _Generated/
+        // Resources/ tree so .meta GUIDs don't drift between machines.
+        // Filename-keyed lookup (Sky_0..Sky_5) means runtime sync is by
+        // filename, not GUID — a generated sky on Machine A maps to the
+        // same one on Machine B regardless of when each authored it.
+        const string SkyLibraryDir = DioRoot + "/_Generated/Resources/Skies";
+        // SkyboxLibrary loads via Resources.Load<Material>("Skies/Sky_<i>")
+        // — keep these paths in lockstep.
 
         [MenuItem("Tools/Dio/Build/Re-import SVGs")]
         public static int ReimportSvgs()
@@ -100,6 +109,244 @@ namespace Dio.UI.EditorTools
             return mat;
         }
 
+        /// Author the 6 cartoon-sky materials the server picks from each race.
+        /// All share `Dio/CartoonSky` and select a visual preset via `_SkyMode`,
+        /// so editing one shader file re-tunes every variant. Assets land under
+        /// Resources/Skies/Sky_<i>.mat where `SkyboxLibrary.Get(i)` finds them.
+        [MenuItem("Tools/Dio/Build/Sky Library")]
+        public static Material[] BuildSkyboxLibrary()
+        {
+            EnsureDir("Assets/Dio/Resources");
+            EnsureDir(SkyLibraryDir);
+            var shader = AssetDatabase.LoadAssetAtPath<Shader>(CartoonSkyShaderPath);
+            if (shader == null)
+            {
+                Debug.LogError($"[Dio] Cartoon sky shader not found at {CartoonSkyShaderPath}");
+                return null;
+            }
+
+            var mats = new Material[Dio.Common.SkyboxLibrary.Count];
+            for (int i = 0; i < mats.Length; i++)
+            {
+                string path = $"{SkyLibraryDir}/Sky_{i}.mat";
+                var mat = AssetDatabase.LoadAssetAtPath<Material>(path);
+                if (mat == null)
+                {
+                    mat = new Material(shader) { name = $"Sky_{i}" };
+                    AssetDatabase.CreateAsset(mat, path);
+                }
+                else
+                {
+                    mat.shader = shader;
+                }
+                ConfigureSkyVariant(mat, i);
+                EditorUtility.SetDirty(mat);
+                mats[i] = mat;
+            }
+            AssetDatabase.SaveAssets();
+            Debug.Log($"[Dio] Built {mats.Length} cartoon sky variants under {SkyLibraryDir}/");
+            return mats;
+        }
+
+        // Per-mode preset values. Property names mirror CartoonSky.shader.
+        // Defaults that aren't relevant to the mode are zeroed/no-op'd so the
+        // shader's branches skip cleanly (e.g. _StarDensity=0 means no stars).
+        static void ConfigureSkyVariant(Material m, int mode)
+        {
+            // ---- shared baseline ----
+            m.SetFloat("_SkyMode", mode);
+            m.SetFloat("_MidPoint", 0.45f);
+            m.SetFloat("_HorizonGlow", 0.18f);
+            m.SetFloat("_SunSize", 0.04f);
+            m.SetFloat("_SunHaloPower", 24f);
+            m.SetFloat("_SunIntensity", 1f);
+            m.SetVector("_SunDir", new Vector4(-0.30f, 0.18f, 1.00f, 0f).normalized);
+            m.SetColor("_SunColor", new Color(1f, 0.92f, 0.70f, 1f));
+            m.SetVector("_MoonDir", new Vector4(0.55f, 0.60f, -0.25f, 0f).normalized);
+            m.SetColor("_MoonColor", new Color(0.95f, 0.95f, 0.92f, 1f));
+            m.SetFloat("_MoonSize", 0f);
+            m.SetFloat("_MoonPhase", 0.45f);
+            m.SetFloat("_MoonGlow", 0.25f);
+            m.SetFloat("_CloudCoverage", 0.55f);
+            m.SetFloat("_CloudScale", 4f);
+            m.SetFloat("_CloudSpeed", 0.04f);
+            m.SetFloat("_CloudDensity", 0f);
+            m.SetFloat("_CloudSoftness", 0.18f);
+            m.SetColor("_CloudColor", new Color(1f, 0.78f, 0.58f, 1f));
+            m.SetColor("_CloudShadow", new Color(0.55f, 0.22f, 0.30f, 1f));
+            m.SetFloat("_StarDensity", 0f);
+            m.SetFloat("_StarBrightness", 1.4f);
+            m.SetFloat("_StarTwinkleSpeed", 1.6f);
+            m.SetFloat("_StarStreakChance", 0f);
+            m.SetColor("_StarColor", Color.white);
+            m.SetColor("_AuroraColor1", new Color(0.20f, 0.95f, 0.55f, 1f));
+            m.SetColor("_AuroraColor2", new Color(0.70f, 0.30f, 0.95f, 1f));
+            m.SetFloat("_AuroraIntensity", 0f);
+            m.SetFloat("_AuroraSpeed", 0.35f);
+            m.SetFloat("_AuroraScale", 1.8f);
+            m.SetColor("_NebulaColor1", new Color(0.80f, 0.30f, 0.95f, 1f));
+            m.SetColor("_NebulaColor2", new Color(0.20f, 0.55f, 0.95f, 1f));
+            m.SetFloat("_NebulaIntensity", 0f);
+            m.SetFloat("_NebulaSpeed", 0.06f);
+            m.SetColor("_ConstellationColor", new Color(0.85f, 0.92f, 1f, 1f));
+            m.SetFloat("_ConstellationStrength", 0f);
+            m.SetFloat("_LightningChance", 0f);
+            m.SetColor("_LightningColor", new Color(0.92f, 0.95f, 1f, 1f));
+
+            switch (mode)
+            {
+                // 0 — Sunset (matches the original SunsetSky look so existing
+                // playtests stay recognisable when this index is rolled).
+                case 0:
+                    m.SetColor("_ColorBottom", new Color(1.00f, 0.55f, 0.20f));
+                    m.SetColor("_ColorMid",    new Color(0.95f, 0.32f, 0.30f));
+                    m.SetColor("_ColorTop",    new Color(0.30f, 0.12f, 0.45f));
+                    m.SetColor("_CloudColor",  new Color(1.00f, 0.78f, 0.58f));
+                    m.SetColor("_CloudShadow", new Color(0.55f, 0.22f, 0.30f));
+                    m.SetFloat("_CloudDensity", 0.85f);
+                    m.SetFloat("_CloudCoverage", 0.55f);
+                    m.SetFloat("_CloudScale", 4f);
+                    m.SetFloat("_CloudSpeed", 0.04f);
+                    break;
+
+                // 1 — Aurora Night. Deep navy gradient, aurora ribbons,
+                // crescent moon, dense star field. No sun.
+                case 1:
+                    m.SetColor("_ColorBottom", new Color(0.04f, 0.06f, 0.18f));
+                    m.SetColor("_ColorMid",    new Color(0.05f, 0.08f, 0.22f));
+                    m.SetColor("_ColorTop",    new Color(0.02f, 0.02f, 0.10f));
+                    m.SetFloat("_HorizonGlow", 0.10f);
+                    m.SetFloat("_SunIntensity", 0f);
+                    m.SetVector("_MoonDir", new Vector4(0.30f, 0.65f, -0.70f, 0f).normalized);
+                    m.SetColor("_MoonColor", new Color(0.90f, 0.94f, 1.00f));
+                    m.SetFloat("_MoonSize", 0.07f);
+                    m.SetFloat("_MoonPhase", 0.35f);
+                    m.SetFloat("_MoonGlow", 0.35f);
+                    m.SetFloat("_StarDensity", 0.85f);
+                    m.SetFloat("_StarBrightness", 1.6f);
+                    m.SetFloat("_StarTwinkleSpeed", 2.2f);
+                    m.SetFloat("_StarStreakChance", 0.18f);
+                    m.SetColor("_StarColor", new Color(0.95f, 0.98f, 1.00f));
+                    m.SetColor("_AuroraColor1", new Color(0.18f, 1.00f, 0.55f));
+                    m.SetColor("_AuroraColor2", new Color(0.55f, 0.30f, 1.00f));
+                    m.SetFloat("_AuroraIntensity", 1.6f);
+                    m.SetFloat("_AuroraSpeed", 0.45f);
+                    m.SetFloat("_AuroraScale", 2.2f);
+                    // Faint clouds for atmosphere; very low density.
+                    m.SetColor("_CloudColor",  new Color(0.18f, 0.20f, 0.28f));
+                    m.SetColor("_CloudShadow", new Color(0.05f, 0.06f, 0.12f));
+                    m.SetFloat("_CloudDensity", 0.25f);
+                    m.SetFloat("_CloudCoverage", 0.70f);
+                    m.SetFloat("_CloudScale", 3f);
+                    m.SetFloat("_CloudSpeed", 0.02f);
+                    break;
+
+                // 2 — Cosmic Galaxy. Purple/teal nebula swirl, dense stars,
+                // shooting stars, no sun, no clouds.
+                case 2:
+                    m.SetColor("_ColorBottom", new Color(0.06f, 0.02f, 0.12f));
+                    m.SetColor("_ColorMid",    new Color(0.10f, 0.04f, 0.20f));
+                    m.SetColor("_ColorTop",    new Color(0.02f, 0.02f, 0.08f));
+                    m.SetFloat("_HorizonGlow", 0.30f);
+                    m.SetColor("_ColorMid",    new Color(0.18f, 0.05f, 0.30f));
+                    m.SetFloat("_SunIntensity", 0f);
+                    m.SetFloat("_StarDensity", 1.0f);
+                    m.SetFloat("_StarBrightness", 1.8f);
+                    m.SetFloat("_StarTwinkleSpeed", 2.8f);
+                    m.SetFloat("_StarStreakChance", 0.35f);
+                    m.SetColor("_StarColor", new Color(1.00f, 0.95f, 0.90f));
+                    m.SetColor("_NebulaColor1", new Color(0.95f, 0.30f, 0.85f));
+                    m.SetColor("_NebulaColor2", new Color(0.20f, 0.85f, 0.95f));
+                    m.SetFloat("_NebulaIntensity", 1.4f);
+                    m.SetFloat("_NebulaSpeed", 0.10f);
+                    m.SetVector("_MoonDir", new Vector4(-0.50f, 0.70f, 0.50f, 0f).normalized);
+                    m.SetColor("_MoonColor", new Color(0.90f, 0.85f, 0.95f));
+                    m.SetFloat("_MoonSize", 0.05f);
+                    m.SetFloat("_MoonPhase", 0.20f);
+                    m.SetFloat("_MoonGlow", 0.50f);
+                    break;
+
+                // 3 — Stormy Daydream. Slate-cyan, dense churning clouds,
+                // intermittent lightning. Daytime; sun is occluded by clouds
+                // most of the time.
+                case 3:
+                    m.SetColor("_ColorBottom", new Color(0.55f, 0.62f, 0.68f));
+                    m.SetColor("_ColorMid",    new Color(0.30f, 0.38f, 0.48f));
+                    m.SetColor("_ColorTop",    new Color(0.12f, 0.18f, 0.28f));
+                    m.SetFloat("_HorizonGlow", 0.05f);
+                    m.SetFloat("_SunIntensity", 0.35f);
+                    m.SetColor("_SunColor", new Color(0.85f, 0.85f, 0.90f));
+                    m.SetVector("_SunDir", new Vector4(0.20f, 0.45f, -0.85f, 0f).normalized);
+                    m.SetFloat("_SunSize", 0.06f);
+                    m.SetColor("_CloudColor",  new Color(0.85f, 0.88f, 0.95f));
+                    m.SetColor("_CloudShadow", new Color(0.20f, 0.22f, 0.30f));
+                    m.SetFloat("_CloudDensity", 1.0f);
+                    m.SetFloat("_CloudCoverage", 0.30f);
+                    m.SetFloat("_CloudScale", 5f);
+                    m.SetFloat("_CloudSpeed", 0.10f);
+                    m.SetFloat("_CloudSoftness", 0.30f);
+                    m.SetFloat("_LightningChance", 0.55f);
+                    m.SetColor("_LightningColor", new Color(0.92f, 0.96f, 1.00f));
+                    break;
+
+                // 4 — Twilight Constellations. Indigo-magenta gradient, big
+                // bright moon, real-shape constellation lines, thin streak
+                // clouds, hint of dusk on the horizon.
+                case 4:
+                    m.SetColor("_ColorBottom", new Color(0.85f, 0.35f, 0.55f));
+                    m.SetColor("_ColorMid",    new Color(0.30f, 0.18f, 0.55f));
+                    m.SetColor("_ColorTop",    new Color(0.08f, 0.05f, 0.20f));
+                    m.SetFloat("_MidPoint", 0.30f);
+                    m.SetFloat("_HorizonGlow", 0.45f);
+                    m.SetFloat("_SunIntensity", 0.20f);
+                    m.SetColor("_SunColor", new Color(1.00f, 0.55f, 0.55f));
+                    m.SetVector("_SunDir", new Vector4(0.55f, -0.05f, 0.85f, 0f).normalized);
+                    m.SetFloat("_SunSize", 0.05f);
+                    m.SetVector("_MoonDir", new Vector4(-0.55f, 0.45f, -0.70f, 0f).normalized);
+                    m.SetColor("_MoonColor", new Color(1.00f, 0.95f, 0.90f));
+                    m.SetFloat("_MoonSize", 0.10f);
+                    m.SetFloat("_MoonPhase", 0.55f);
+                    m.SetFloat("_MoonGlow", 0.45f);
+                    m.SetFloat("_StarDensity", 0.55f);
+                    m.SetFloat("_StarBrightness", 1.3f);
+                    m.SetFloat("_StarTwinkleSpeed", 1.8f);
+                    m.SetColor("_StarColor", new Color(0.95f, 0.92f, 1.00f));
+                    m.SetColor("_ConstellationColor", new Color(0.85f, 0.92f, 1.00f));
+                    m.SetFloat("_ConstellationStrength", 1.6f);
+                    // Thin streaky high clouds.
+                    m.SetColor("_CloudColor",  new Color(0.85f, 0.55f, 0.75f));
+                    m.SetColor("_CloudShadow", new Color(0.20f, 0.10f, 0.35f));
+                    m.SetFloat("_CloudDensity", 0.40f);
+                    m.SetFloat("_CloudCoverage", 0.78f);
+                    m.SetFloat("_CloudScale", 6f);
+                    m.SetFloat("_CloudSpeed", 0.025f);
+                    m.SetFloat("_CloudSoftness", 0.10f);
+                    break;
+
+                // 5 — Cotton Candy Dawn. Pastel pink+lavender+mint gradient,
+                // big puffy slow clouds, soft chromatic sun. Bright and airy.
+                case 5:
+                    m.SetColor("_ColorBottom", new Color(1.00f, 0.85f, 0.92f));
+                    m.SetColor("_ColorMid",    new Color(0.85f, 0.78f, 1.00f));
+                    m.SetColor("_ColorTop",    new Color(0.65f, 0.95f, 0.85f));
+                    m.SetFloat("_MidPoint", 0.45f);
+                    m.SetFloat("_HorizonGlow", 0.35f);
+                    m.SetFloat("_SunIntensity", 1.4f);
+                    m.SetColor("_SunColor", new Color(1.00f, 0.95f, 0.85f));
+                    m.SetFloat("_SunSize", 0.07f);
+                    m.SetFloat("_SunHaloPower", 14f);
+                    m.SetVector("_SunDir", new Vector4(0.40f, 0.10f, 0.92f, 0f).normalized);
+                    m.SetColor("_CloudColor",  new Color(1.00f, 0.95f, 1.00f));
+                    m.SetColor("_CloudShadow", new Color(0.85f, 0.65f, 0.95f));
+                    m.SetFloat("_CloudDensity", 0.90f);
+                    m.SetFloat("_CloudCoverage", 0.60f);
+                    m.SetFloat("_CloudScale", 3.2f);
+                    m.SetFloat("_CloudSpeed", 0.025f);
+                    m.SetFloat("_CloudSoftness", 0.25f);
+                    break;
+            }
+        }
+
         [MenuItem("Tools/Dio/Build/All (Player + NetMgr + Car + Powerups + Level + Main Scene)", priority = 0)]
         public static void BuildAll()
         {
@@ -110,6 +357,7 @@ namespace Dio.UI.EditorTools
             }
 
             ReimportSvgs(); // ensure com.unity.vectorgraphics has processed every .svg before we look up sprites
+            BuildSkyboxLibrary(); // generate the 6 cartoon-sky variants the server picks from
             BuildPlayerPrefab();
             // Author / refresh the Kenney VehicleProfile assets first, so
             // BuildAllCarPrefabs has up-to-date input. Idempotent — re-running
@@ -133,8 +381,14 @@ namespace Dio.UI.EditorTools
             // built player can find it via Resources.Load("Globe"). Mesh
             // colliders are pre-attached at edit-time so the runtime spawn
             // path doesn't need to walk the hierarchy.
-            const string ResourcesDir = "Assets/Dio/Resources";
+            //
+            // Output goes under the gitignored _Generated/Resources/ folder
+            // so two machines never end up with conflicting .meta GUIDs
+            // for this prefab (which is derived from world.fbx and is
+            // rebuilt on demand).
+            const string ResourcesDir = "Assets/Dio/_Generated/Resources";
             const string GlobePrefabPath = ResourcesDir + "/Globe.prefab";
+            EnsureDir("Assets/Dio/_Generated");
             EnsureDir(ResourcesDir);
 
             var src = AssetDatabase.LoadAssetAtPath<GameObject>("Assets/3d world/world.fbx");
@@ -337,8 +591,14 @@ namespace Dio.UI.EditorTools
             // sky / mystery-box / car shaders animate in lock-step on every peer.
             sunGo.AddComponent<Dio.Common.NetworkTimeBinder>();
 
-            // Sunset skybox.
-            var skyMat = BuildSkyboxMaterial();
+            // Lobby skybox: pick one of the library variants so the menu
+            // already shows the same cartoon look the race-time roll uses.
+            // Race start replaces this with the server-rolled index on every
+            // peer (see RaceBootstrap.OnRaceStarted + SkyboxLibrary).
+            var skyLibrary = BuildSkyboxLibrary();
+            var skyMat = (skyLibrary != null && skyLibrary.Length > 0)
+                ? skyLibrary[0]
+                : BuildSkyboxMaterial();
             if (skyMat != null)
             {
                 RenderSettings.skybox = skyMat;

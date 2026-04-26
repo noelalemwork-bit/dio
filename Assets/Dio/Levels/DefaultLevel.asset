@@ -12,7 +12,6 @@ MonoBehaviour:
   m_Script: {fileID: 11500000, guid: 1bc9a7716bc36b04f93b3d69603db1de, type: 3}
   m_Name: DefaultLevel
   m_EditorClassIdentifier: Assembly-CSharp::Dio.Level.LevelData
-  displayName: DefaultLevel
   circumference: 1256.6371
   trackRatio: 1
   trackWidth: 15
@@ -22,10 +21,12 @@ MonoBehaviour:
     inHandle: {x: 0, y: 0, z: 0}
     outHandle: {x: 0, y: 0, z: 0}
     yOffset: 0
+    guardRailFloating: 0
     next: 
   - directionFromCenter: {x: 0.696526, y: 0.39801487, z: 0.5970223}
     bank: 0
     inHandle: {x: 0, y: 0, z: 0}
     outHandle: {x: 0, y: 0, z: 0}
     yOffset: 0
+    guardRailFloating: 0
     next: 

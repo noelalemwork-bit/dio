@@ -26,7 +26,15 @@ namespace Dio.Player.EditorTools
     public static class KenneyProfileAuthor
     {
         const string FbxRoot = "Assets/3d world/Kenney FBX Cars";
-        const string ProfilesDir = "Assets/Dio/Vehicles";
+        // Profiles live under a gitignored Resources/ folder. Each peer
+        // re-authors them locally (`Tools/Dio/Build/Author Kenney Vehicle
+        // Profiles`) so the asset content is identical across machines.
+        // We sync by ASSET FILENAME (`profile.name`), never by array index
+        // or GUID, so `.meta` divergence between machines is irrelevant.
+        const string GeneratedRoot = "Assets/Dio/_Generated";
+        const string ProfilesDir   = GeneratedRoot + "/Resources/Vehicles";
+        const string LegacyProfilesDir = "Assets/Dio/Vehicles";
+        const string LegacyResourcesDir = "Assets/Dio/Resources/Vehicles";
 
         // Each entry encodes the design-side knobs we care about per car —
         // visual scale + physics + which Kenney source asset supplies the
@@ -189,14 +197,25 @@ namespace Dio.Player.EditorTools
         [MenuItem("Tools/Dio/Build/Author Kenney Vehicle Profiles")]
         public static void Author()
         {
+            EnsureDir(GeneratedRoot);
+            EnsureDir(GeneratedRoot + "/Resources");
             EnsureDir(ProfilesDir);
-            // Wipe stale profiles authored before this generator existed —
-            // they pointed at a now-stale FBX guid and were rendering blank.
-            foreach (var staleName in new[] { "KartProfile", "RaceProfile", "SedanProfile", "SUVProfile", "TruckProfile", "DefaultKart" })
+            // Wipe every legacy / stale profile location so the active
+            // pool is JUST what _Generated/Resources/Vehicles/ holds. This
+            // keeps the runtime `Resources.LoadAll<VehicleProfile>("Vehicles")`
+            // pool deterministic — no leftover tracked profile sneaking in
+            // and shifting the sort order on one machine vs another.
+            foreach (var dir in new[] { LegacyProfilesDir, LegacyResourcesDir })
             {
-                string p = $"{ProfilesDir}/{staleName}.asset";
-                if (AssetDatabase.LoadAssetAtPath<VehicleProfile>(p) != null)
-                    AssetDatabase.DeleteAsset(p);
+                if (!AssetDatabase.IsValidFolder(dir)) continue;
+                var stale = AssetDatabase.FindAssets("t:VehicleProfile", new[] { dir });
+                foreach (var g in stale) AssetDatabase.DeleteAsset(AssetDatabase.GUIDToAssetPath(g));
+            }
+            // Same for any leftover profile inside the active dir from a
+            // prior Author run — Specs[] is the single source of truth.
+            {
+                var stale = AssetDatabase.FindAssets("t:VehicleProfile", new[] { ProfilesDir });
+                foreach (var g in stale) AssetDatabase.DeleteAsset(AssetDatabase.GUIDToAssetPath(g));
             }
 
             int count = 0;
@@ -214,7 +233,6 @@ namespace Dio.Player.EditorTools
                     profile = ScriptableObject.CreateInstance<VehicleProfile>();
                     AssetDatabase.CreateAsset(profile, path);
                 }
-                profile.displayName = spec.Display;
                 profile.bodyMesh = bodyMesh;
                 profile.bodyScale = spec.BodyScale;
                 profile.bodyOffset = spec.BodyOffset;

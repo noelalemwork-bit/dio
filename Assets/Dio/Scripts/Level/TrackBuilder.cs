@@ -75,7 +75,9 @@ namespace Dio.Level
     public static class TrackBuilder
     {
         public const int DefaultSegmentsPerArc = 64;
-        public const int EditorPreviewSegmentsPerArc = 16;
+        // Editor preview runs at ~0.75× the previous resolution for snappier
+        // iteration; the runtime stays at the full DefaultSegmentsPerArc.
+        public const int EditorPreviewSegmentsPerArc = 12;
         const float DerivEpsilon = 0.001f;
 
         // Bezier tangent. At the endpoints (t=0 / t=1) we use the ANALYTIC
@@ -445,6 +447,13 @@ namespace Dio.Level
         // The skirt bottom is independent and uses each sample's actual
         // surface raycast (so the rail still hugs uneven terrain DOWNWARD
         // even when the ribbon's top is flat).
+        //
+        // Per-edge floating rail: if the edge's start anchor sets
+        // `guardRailFloating`, override `floorAtSurface = false` and pin the
+        // skirt depth to roughly the wall height (so the rail's vertical
+        // span is symmetric — wallHeight up, ~wallHeight + 0.05u down). This
+        // lets an elevated/looping section keep a tidy short skirt instead
+        // of dragging a giant wall down to the ground beneath it.
         static void EmitGuardStrip(LevelData level, GlobeRaycaster raycaster, in GuardOptions opt,
             int from, int to, float signOfWidth, int sStart, int sEnd, int segmentsPerArc,
             List<Vector3> verts, List<int> tris)
@@ -452,6 +461,14 @@ namespace Dio.Level
             if (sStart > sEnd) return;
             level.GetEdge(from, to, out Vector3 a, out Vector3 ah, out Vector3 bh, out Vector3 b);
             float halfW = level.EffectiveTrackWidth * 0.5f;
+
+            // Per-edge override of the cross-section's floor behaviour.
+            GuardOptions edgeOpt = opt;
+            if (level.points[from].guardRailFloating)
+            {
+                edgeOpt.floorAtSurface = false;
+                edgeOpt.skirtDepth     = 0.05f + Mathf.Max(0f, opt.wallHeight);
+            }
 
             float startSurfaceR = raycaster != null ? raycaster.ResolveSurfaceRadius(a) : level.NominalRadius;
             float endSurfaceR   = raycaster != null ? raycaster.ResolveSurfaceRadius(b) : level.NominalRadius;
@@ -498,9 +515,9 @@ namespace Dio.Level
                 // ribbon. Falls back to NominalRadius on miss.
                 float surfaceR = raycaster != null ? raycaster.ResolveSurfaceRadius(dir) : level.NominalRadius;
 
-                Vector3 anchor = dir * topRadial + sideOutward * (halfW + opt.outwardOffset);
+                Vector3 anchor = dir * topRadial + sideOutward * (halfW + edgeOpt.outwardOffset);
                 int inwardSign = signOfWidth > 0 ? -1 : +1;
-                AppendCross(verts, tris, anchor, dir, surfaceR, sideOutward, opt, local, inwardSign);
+                AppendCross(verts, tris, anchor, dir, surfaceR, sideOutward, edgeOpt, local, inwardSign);
                 prevDir = dir;
                 prevTan = tangent;
                 havePrev = true;

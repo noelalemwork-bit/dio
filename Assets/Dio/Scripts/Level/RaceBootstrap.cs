@@ -86,9 +86,26 @@ namespace Dio.Level
             }
             else
             {
-                Debug.Log($"[RaceBootstrap] resolved race level '{lvl.displayName}' (owner={msg.levelOwnerConnId}, points={lvl.points.Count})");
+                Debug.Log($"[RaceBootstrap] resolved race level '{lvl.name}' (owner={msg.levelOwnerConnId}, points={lvl.points.Count})");
             }
+            ApplyServerRolledSkybox(msg.skyboxIndex);
             BuildVisualScene(lvl);
+        }
+
+        // Swap RenderSettings.skybox to the server's chosen library entry.
+        // SkyboxPlayerUpBinder watches RenderSettings.skybox and re-clones
+        // its runtime material when the source changes, so the spherical
+        // _PlayerUp pipeline keeps working after the switch.
+        static void ApplyServerRolledSkybox(int skyboxIndex)
+        {
+            if (skyboxIndex < 0) return;
+            var mat = Dio.Common.SkyboxLibrary.GetOrFallback(skyboxIndex);
+            if (mat == null) return;
+            RenderSettings.skybox = mat;
+            // Refresh ambient lighting from the new sky so the world isn't
+            // lit by the previous race's mood.
+            DynamicGI.UpdateEnvironment();
+            Debug.Log($"[RaceBootstrap] skybox set to library index {skyboxIndex} ('{mat.name}')");
         }
 
         void OnRaceWon(RaceWonMessage msg)
@@ -224,9 +241,12 @@ namespace Dio.Level
             // Use the same Z-section options as the main track guards so the
             // pad's side rails feel identical to the rest of the track —
             // including the visible elevation skirt for elevated start lines.
+            // Low rim (≈ 35cm) keeps the surrounding scenery visible and lets
+            // a hard collision still throw the car off; matches the main
+            // track's lowered profile.
             var guardOpt = TrackBuilder.GuardOptions.Default;
-            guardOpt.wallHeight = 2.2f;
-            guardOpt.lipOutward = 0.4f;
+            guardOpt.wallHeight = 0.35f;
+            guardOpt.lipOutward = 0.05f;
             guardOpt.outwardOffset = 0.05f;
             guardOpt.floorAtSurface = true;
             guardOpt.floorPad = 1f;
@@ -256,6 +276,9 @@ namespace Dio.Level
             if (asphalt != null) ribbonGo.GetComponent<MeshRenderer>().sharedMaterial = asphalt;
             var rmc = ribbonGo.GetComponent<MeshCollider>();
             rmc.sharedMesh = pad.ribbon; rmc.convex = false;
+            // Tag as track surface so OffTrackRespawn doesn't yank starting-row
+            // cars who haven't crossed onto the main ribbon yet.
+            ribbonGo.AddComponent<SurfaceComponent>().type = SurfaceType.Asphalt;
 
             // Side rails — same material as the main guards so they read as
             // the natural continuation of the track behind the start line.
@@ -289,15 +312,18 @@ namespace Dio.Level
         {
             if (_guards != null) Destroy(_guards);
 
-            // Z-shape rails. Wall is tall enough to box cars in (≈ 2.2m,
-            // visibly above the chassis but not so high that it blocks
-            // distant scenery / horizon visible past the rail) with a 0.4m
-            // outward lip that catches a car bouncing off the wall before
-            // it can pop over the top. 1m skirt covers the seam to the
-            // low-poly planet collider.
+            // Low rim rail (~ 35cm tall, 5cm lip). Tall enough to scrape
+            // the wheels and discourage cutting the track edge, low enough
+            // to keep the surrounding planet/scenery visible AND let a hard
+            // bounce throw the car clean over the edge — that's the design
+            // choice the user wants for the "risk falling off" feel. The
+            // OffTrackRespawn component on each car snaps a fallen car back
+            // to the last checkpoint after a couple seconds of no track
+            // contact. 1m skirt covers the seam to the low-poly planet
+            // collider so the rail doesn't float visually on uneven ground.
             var opt = TrackBuilder.GuardOptions.Default;
-            opt.wallHeight = 2.2f;
-            opt.lipOutward = 0.4f;
+            opt.wallHeight = 0.35f;
+            opt.lipOutward = 0.05f;
             opt.outwardOffset = 0.05f;
             opt.floorAtSurface = true;          // skirt always reaches the actual ground
             opt.floorPad = 1f;

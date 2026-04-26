@@ -41,6 +41,18 @@ namespace Dio.Level
         [Tooltip("Height offset added on top of the raycast-derived surface radius (>= 0). Use this to lift sections of track above the terrain.")]
         public float yOffset;
 
+        // Per-bezier guard rail style. The flag is read on the START anchor
+        // of each outgoing edge — i.e. it controls the rail style of every
+        // bezier LEAVING this node. Default (false) = original behavior:
+        // the skirt extends down to the planet surface so the road's elevation
+        // reads as a solid wall. When true, the skirt only drops a fixed
+        // amount below the road surface (≈ wallHeight + 0.05u), so an
+        // elevated/looping section doesn't drag a giant skirt down to the
+        // ground beneath it. Designer toggles this with the editor's
+        // "Edit Guardrails" mode.
+        [Tooltip("If true, guardrails on outgoing beziers float (short skirt) instead of extending to the planet surface. Use for elevated / loop sections so the skirt doesn't drop to the ground.")]
+        public bool guardRailFloating;
+
         [Tooltip("Outgoing edges from this node (anchor indices). Empty = leaf / finish. Multiple = fork.")]
         public List<int> next;
     }
@@ -48,8 +60,12 @@ namespace Dio.Level
     [CreateAssetMenu(menuName = "Dio/Level Data", fileName = "NewLevel")]
     public class LevelData : ScriptableObject
     {
-        [Tooltip("Display name shown in the lobby. MUST be unique within an owner's level collection — the network-side catalog is keyed by (owner connection id, displayName).")]
-        public string displayName = "";
+        // Identity is the asset's FILENAME (`level.name`). No editable
+        // displayName field — networking keys catalogs by (ownerConnId,
+        // filename), filenames are version-controlled, so two machines
+        // ALWAYS agree on which level is which. Rename the asset file in
+        // the project view to rename the level (Tools/Dio/New Level
+        // generates a unique two-word name automatically).
 
         [Tooltip("Designer-facing 'how far around the planet you'd drive', in world units. Internally we resolve a nominal radius = circumference / 2π.")]
         public float circumference = 1256.6f;   // ≈ 2π * 200, matches the legacy 200u radius

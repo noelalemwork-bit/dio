@@ -29,6 +29,22 @@ namespace Dio.Level.EditorTools
     ///     on the live shift state; key events trigger a repaint so the
     ///     arrows snap on/off cleanly.
     ///   * Ctrl + click endpoint: append (or prepend) a new anchor and drag it.
+    ///   * Ctrl + click interior anchor: INSERT a new anchor immediately after
+    ///     the source in the chain. The clone copies the source's handles,
+    ///     position, and yOffset; as the user drags, MoveAnchorRigid rotates
+    ///     the handles along with the new anchor. Source's outgoing edges
+    ///     transfer to the clone (so the chain becomes A → source → clone →
+    ///     ...originalSuccessors). Exactly ONE new anchor is created.
+    ///   * Right-click interior anchor: PARALLEL CLONE — the source stays
+    ///     put with all its existing edges; the clone is dragged out as a
+    ///     parallel branch through every predecessor and successor of the
+    ///     source. Topology: P → [source, clone] → N. Use this when you
+    ///     want a literal alternate path that rejoins, not an inline
+    ///     refinement of the existing path.
+    ///   * "Edit Guardrails" toolbar toggle: when active, clicking an anchor
+    ///     toggles its `guardRailFloating` flag (controls every outgoing
+    ///     bezier's rail style). The preview rebuilds incrementally — same
+    ///     hash gate as anchor edits.
     ///   * Del: remove the currently dragged anchor (chain must keep ≥2).
     ///
     /// The Globe (world.fbx) is rendered as actual 3D geometry through a
@@ -114,19 +130,19 @@ namespace Dio.Level.EditorTools
         Rect _viewRect;
 
         // Drag state.
-        enum DragKind { None, Anchor, InHandle, OutHandle, Orbit, ShiftExtend, YOffset, Fork }
+        enum DragKind { None, Anchor, InHandle, OutHandle, Orbit, ShiftExtend, YOffset }
         DragKind _dragKind = DragKind.None;
         int _draggedIndex = -1;
-        // Source anchor when forking. `_draggedIndex` is the NEW (cloned) point's
-        // index; `_forkSourceIdx` is the original anchor whose outgoing edge we
-        // just added. We keep them separate so the fork drag handler doesn't
-        // overwrite the source's shared outHandle.
-        int _forkSourceIdx = -1;
         // For C1 reflection: cache partner's angular distance at drag-start
         // so we preserve its "magnitude" while flipping its tangent.
         int _partnerAnchorIdx = -1;
         DragKind _partnerKind = DragKind.None;
         float _partnerAngularDist = 0f;
+
+        // "Edit Guardrails" mode: while on, left-click on an anchor toggles
+        // that anchor's `guardRailFloating` flag instead of starting a drag.
+        // Empty-space clicks still orbit so the user can navigate the planet.
+        bool _editGuardrails = false;
 
         [MenuItem("Tools/Dio/Open Level Editor")]
         public static void Open()
@@ -150,7 +166,15 @@ namespace Dio.Level.EditorTools
             if (!AssetDatabase.IsValidFolder(dir))
                 AssetDatabase.CreateFolder("Assets/Dio", "Levels");
 
-            string path = AssetDatabase.GenerateUniqueAssetPath($"{dir}/Level.asset");
+            // Auto-stamp a unique two-word asset filename (e.g. "BraveCove",
+            // "MysticReef"). The asset filename IS the level identity for
+            // networking / lobby keying — there's no separate displayName
+            // to keep in sync. GenerateUniqueAssetPath adds " 1", " 2"
+            // suffixes if a same-named asset already exists, but the
+            // generator already filters for collisions, so it's belt-and-
+            // suspenders.
+            string nameSlug = LevelNaming.Generate();
+            string path = AssetDatabase.GenerateUniqueAssetPath($"{dir}/{nameSlug}.asset");
             AssetDatabase.CreateAsset(asset, path);
             AssetDatabase.SaveAssets();
 
@@ -295,6 +319,10 @@ namespace Dio.Level.EditorTools
                     h = h * 31 + p.inHandle.GetHashCode();
                     h = h * 31 + p.outHandle.GetHashCode();
                     h = h * 31 + p.yOffset.GetHashCode();
+                    h = h * 31 + (p.guardRailFloating ? 1 : 0);
+                    if (p.next != null)
+                        for (int k = 0; k < p.next.Count; k++)
+                            h = h * 31 + p.next[k];
                 }
                 return h;
             }
@@ -312,6 +340,10 @@ namespace Dio.Level.EditorTools
                 level.EnsureLinearChainNext();
             }
             if (GUILayout.Button("New", EditorStyles.toolbarButton, GUILayout.Width(60))) NewLevel();
+            GUILayout.Space(8);
+            bool prevGuardEdit = _editGuardrails;
+            _editGuardrails = GUILayout.Toggle(_editGuardrails, "Edit Guardrails", EditorStyles.toolbarButton, GUILayout.Width(120));
+            if (prevGuardEdit != _editGuardrails) Repaint();
             GUILayout.FlexibleSpace();
             if (level != null)
                 EditorGUILayout.LabelField($"C={level.circumference:0}  pts={level.points.Count}", GUILayout.Width(160));
@@ -325,23 +357,13 @@ namespace Dio.Level.EditorTools
 
             EditorGUI.BeginChangeCheck();
 
-            // Display name + uniqueness check. Empty field auto-fills to the
-            // file name on first scan; a user-typed name that collides with
-            // another level is shown in red and refused on save (we still
-            // accept the typed value into the field so the user can correct).
-            string newName = EditorGUILayout.TextField("Display name", level.displayName ?? string.Empty);
-            if (newName != level.displayName)
-            {
-                level.displayName = newName;
-            }
-            if (!string.IsNullOrWhiteSpace(level.displayName)
-                && Dio.Level.LevelLibrary.IsDisplayNameTaken(level, level.displayName))
-            {
-                EditorGUILayout.HelpBox(
-                    $"Display name \"{level.displayName}\" collides with another level. " +
-                    "Pick a unique name — the network catalog keys by (owner, displayName).",
-                    MessageType.Error);
-            }
+            // Identity = asset filename. Read-only here so the user notices
+            // that renaming is done in the Project view (Tools/Dio/New
+            // Level auto-stamps a unique two-word name on creation). The
+            // network catalog keys on this filename so two machines always
+            // agree on which level is which.
+            using (new EditorGUI.DisabledScope(true))
+                EditorGUILayout.TextField("Asset name", level.name ?? string.Empty);
 
             level.circumference = Mathf.Max(1f, EditorGUILayout.FloatField("Circumference", level.circumference));
             level.trackWidth = EditorGUILayout.FloatField("Track width (canonical)", level.trackWidth);
@@ -356,7 +378,9 @@ namespace Dio.Level.EditorTools
             HandleKeyboard();
 
             EditorGUILayout.LabelField(
-                "Drag empty: orbit  ·  Wheel: zoom  ·  Click anchor / handle: drag  ·  Hold Shift: yOffset arrows  ·  Ctrl+endpoint: extend track  ·  Del: remove anchor",
+                _editGuardrails
+                    ? "Edit Guardrails ON  ·  Click anchor: toggle floating skirt  ·  Drag empty: orbit  ·  Toggle off to resume normal editing"
+                    : "Drag empty: orbit  ·  Wheel: zoom  ·  Click anchor / handle: drag  ·  Hold Shift: yOffset arrows  ·  Ctrl+endpoint: extend  ·  Ctrl+interior: clone-insert  ·  Right-click interior: parallel clone  ·  Del: remove anchor",
                 EditorStyles.miniLabel);
         }
 
@@ -419,13 +443,36 @@ namespace Dio.Level.EditorTools
                     if (e.button == 0)
                     {
                         var pick = PickAtMouse(e.mousePosition);
-                        if (pick.kind == DragKind.Anchor && e.shift)
+                        if (_editGuardrails)
+                        {
+                            // In guardrail-edit mode, an anchor click toggles
+                            // the rail-style flag. Anything else falls through
+                            // to orbit so the user can still navigate.
+                            if (pick.kind == DragKind.Anchor)
+                            {
+                                ToggleGuardrailFloating(pick.index);
+                                _dragKind = DragKind.None;
+                            }
+                            else
+                            {
+                                _dragKind = DragKind.Orbit;
+                                _draggedIndex = -1;
+                            }
+                        }
+                        else if (pick.kind == DragKind.Anchor && e.shift)
                         {
                             BeginYOffsetDrag(pick.index);
                         }
                         else if (pick.kind == DragKind.Anchor && e.control && IsEndpoint(pick.index))
                         {
                             BeginExtendFromEndpoint(pick.index, e.mousePosition);
+                        }
+                        else if (pick.kind == DragKind.Anchor && e.control)
+                        {
+                            // Ctrl+click on a non-endpoint anchor: insert a
+                            // clone immediately after the source. Single new
+                            // anchor — no parallel paths, no graph rewiring.
+                            BeginCloneInsertAfterAnchor(pick.index, e.mousePosition);
                         }
                         else if (pick.kind != DragKind.None)
                         {
@@ -441,18 +488,21 @@ namespace Dio.Level.EditorTools
                     }
                     else if (e.button == 1)
                     {
-                        // Right-click on a non-endpoint anchor = fork the
-                        // track from there to a new dragged point. Right-
-                        // click on empty space (or on the start/finish) =
-                        // orbit camera.
+                        // Right-click on an interior anchor: parallel clone.
+                        // Source stays put with all its edges; we drag out a
+                        // duplicate that branches in parallel from every
+                        // predecessor and rejoins through every successor.
+                        // Endpoints / empty space / edit-guardrails mode →
+                        // orbit camera (so the user can still navigate).
                         var pick = PickAtMouse(e.mousePosition);
-                        if (pick.kind == DragKind.Anchor && !IsEndpoint(pick.index))
+                        if (!_editGuardrails && pick.kind == DragKind.Anchor && !IsEndpoint(pick.index))
                         {
-                            BeginForkFromAnchor(pick.index, e.mousePosition);
+                            BeginParallelCloneFromAnchor(pick.index, e.mousePosition);
                         }
                         else
                         {
                             _dragKind = DragKind.Orbit;
+                            _draggedIndex = -1;
                         }
                         GUIUtility.hotControl = controlID;
                         e.Use();
@@ -529,18 +579,6 @@ namespace Dio.Level.EditorTools
                             Save(); Repaint();
                         }
                         break;
-
-                    case DragKind.Fork:
-                        if (_draggedIndex >= 0 && _forkSourceIdx >= 0 && PickDirection(e.mousePosition, out Vector3 dirF))
-                        {
-                            SetAnchorDirOnly(_draggedIndex, dirF);
-                            // The clone keeps the source's handles verbatim;
-                            // dragging it doesn't reset them. Visual continuity
-                            // is preserved because every connection the source
-                            // had now also exists from / to the clone.
-                            Save(); Repaint();
-                        }
-                        break;
                 }
                 e.Use();
             }
@@ -551,48 +589,116 @@ namespace Dio.Level.EditorTools
                 _dragKind = DragKind.None;
                 _draggedIndex = -1;
                 _partnerAnchorIdx = -1;
-                _forkSourceIdx = -1;
                 e.Use();
             }
         }
 
-        // Right-click drag from an interior anchor: clones the anchor at the
-        // drag location, adds an outgoing edge from the source to the clone.
-        // The source's outHandle is REUSED (shared) by the new edge — that's
-        // the user-spec'd "control points shared between original and new".
-        // The new clone is a leaf (no outgoing) until the user wires it up.
-        // Right-click drag on a non-endpoint anchor creates a PARALLEL branch
-        // through a clone of that anchor. The clone duplicates the source's
-        // entire topology (handles + incoming + outgoing connections) so
-        // dragging it produces a parallel path that diverges and rejoins
-        // cleanly — no graph-breaking, no orphans, no leaves left behind.
+        // Ctrl+click on an interior anchor: insert a single new anchor
+        // immediately after `sourceIdx` in the chain. The clone copies the
+        // source's directionFromCenter, handles, yOffset, bank, and rail
+        // flag, and inherits the source's outgoing edge list verbatim. The
+        // source's `next` becomes [clone] alone. Result:
         //
-        // Concretely: if `B → source → C` exists, we end up with both
-        // `B → source → C` and `B → clone → C`. As the user drags the clone
-        // it pulls one of those parallel paths into a new shape; the source
-        // stays put on the original line.
-        void BeginForkFromAnchor(int sourceIdx, Vector2 mouse)
+        //     ... → source → clone → (source's old successors)
+        //
+        // No parallel paths, no extra incoming edges added to predecessors,
+        // no graph rewiring beyond the index shift. Exactly one TrackPoint
+        // is appended. As the user drags the clone, MoveAnchorRigid rotates
+        // its handles via FromToRotation so the control points "drag along"
+        // with the new anchor — the user-spec'd behavior.
+        void BeginCloneInsertAfterAnchor(int sourceIdx, Vector2 mouse)
         {
-            Undo.RecordObject(level, "Fork Track");
+            Undo.RecordObject(level, "Insert Track Point");
             var source = level.points[sourceIdx];
 
-            // Clone every field — handles AND outgoing edges are copied so
-            // the clone reaches every downstream the source reaches.
+            // Clone copies every visible field. We give it a fresh `next`
+            // list (copy of source's old outgoing) so mutating one no longer
+            // affects the other.
             var clone = new TrackPoint
             {
                 directionFromCenter = source.directionFromCenter,
-                yOffset = source.yOffset,
-                bank = source.bank,
-                inHandle = source.inHandle,
-                outHandle = source.outHandle,
-                next = source.next != null ? new List<int>(source.next) : new List<int>(),
+                yOffset             = source.yOffset,
+                bank                = source.bank,
+                inHandle            = source.inHandle,
+                outHandle           = source.outHandle,
+                guardRailFloating   = source.guardRailFloating,
+                next                = source.next != null ? new List<int>(source.next) : new List<int>(),
+            };
+
+            int newIdx = sourceIdx + 1;
+            level.points.Insert(newIdx, clone);
+
+            // After Insert, every existing index >= newIdx shifted by +1.
+            // Bump every adjacency entry pointing past the insertion site
+            // so old anchor references stay correct. We skip the source row
+            // because we'll override its `next` to [clone] explicitly below.
+            for (int i = 0; i < level.points.Count; i++)
+            {
+                if (i == sourceIdx) continue;
+                var p = level.points[i];
+                if (p.next == null) continue;
+                for (int k = 0; k < p.next.Count; k++)
+                    if (p.next[k] >= newIdx) p.next[k] += 1;
+                level.points[i] = p;
+            }
+
+            // Source now points only to the clone — every old outgoing edge
+            // has been transferred to the clone (whose `next` was already
+            // populated and shifted by the loop above).
+            var src = level.points[sourceIdx];
+            src.next = new List<int> { newIdx };
+            level.points[sourceIdx] = src;
+
+            // Standard anchor drag — handles ride along via MoveAnchorRigid.
+            _dragKind = DragKind.Anchor;
+            _draggedIndex = newIdx;
+            _partnerAnchorIdx = -1;
+
+            if (PickDirection(mouse, out Vector3 dir))
+                MoveAnchorRigid(newIdx, dir);
+
+            int reachable = CountReachableFromAnchor0();
+            if (reachable != level.points.Count)
+                Debug.LogWarning($"[Dio Level Editor] Clone-insert left {level.points.Count - reachable} orphan anchor(s).");
+            Save();
+        }
+
+        // Right-click on an interior anchor: PARALLEL CLONE. The source
+        // stays put with all its edges intact; the clone is born at the
+        // source's position with copies of its handles, yOffset, bank, and
+        // rail flag, and inherits the source's outgoing edge list. Every
+        // predecessor of the source ALSO gains an outgoing edge to the
+        // clone, so the topology becomes:
+        //
+        //     P → [source, clone] → N    (parallel branches that rejoin)
+        //
+        // The clone's two control points start identical to the source's
+        // and ride along during the drag via MoveAnchorRigid's
+        // FromToRotation — so the parallel beziers stay smoothly connected
+        // to the same predecessor/successor anchors that the source's
+        // bezier connects to.
+        void BeginParallelCloneFromAnchor(int sourceIdx, Vector2 mouse)
+        {
+            Undo.RecordObject(level, "Clone Track Point (Parallel)");
+            var source = level.points[sourceIdx];
+
+            var clone = new TrackPoint
+            {
+                directionFromCenter = source.directionFromCenter,
+                yOffset             = source.yOffset,
+                bank                = source.bank,
+                inHandle            = source.inHandle,
+                outHandle           = source.outHandle,
+                guardRailFloating   = source.guardRailFloating,
+                next                = source.next != null ? new List<int>(source.next) : new List<int>(),
             };
             int newIdx = level.points.Count;
             level.points.Add(clone);
 
-            // Mirror INCOMING connections too — every anchor that pointed to
-            // `source` now also points to `clone`, so the clone is reachable
-            // from upstream without breaking the existing chain.
+            // Mirror incoming: every anchor that has `source` in its `next`
+            // list also gets `clone` added. So the clone is reachable from
+            // every predecessor of the source — both branches of the fork
+            // start from the same upstream points.
             for (int i = 0; i < newIdx; i++)
             {
                 var p = level.points[i];
@@ -604,13 +710,35 @@ namespace Dio.Level.EditorTools
                 }
             }
 
-            _dragKind = DragKind.Fork;
+            // Standard anchor drag — handles ride along via MoveAnchorRigid
+            // so the parallel bezier endpoints stay connected to the same
+            // predecessors / successors as the source's bezier.
+            _dragKind = DragKind.Anchor;
             _draggedIndex = newIdx;
-            _forkSourceIdx = sourceIdx;
+            _partnerAnchorIdx = -1;
 
             if (PickDirection(mouse, out Vector3 dir))
-                SetAnchorDirOnly(newIdx, dir);
+                MoveAnchorRigid(newIdx, dir);
+
+            int reachable = CountReachableFromAnchor0();
+            if (reachable != level.points.Count)
+                Debug.LogWarning($"[Dio Level Editor] Parallel clone left {level.points.Count - reachable} orphan anchor(s).");
             Save();
+        }
+
+        // Edit-Guardrails-mode click handler: flip the floating-skirt flag
+        // on the clicked anchor. The flag controls every outgoing bezier of
+        // the anchor; the preview rebuilds on the next OnGUI because the
+        // flag participates in `ComputeLevelHash`.
+        void ToggleGuardrailFloating(int anchorIdx)
+        {
+            if (anchorIdx < 0 || anchorIdx >= level.points.Count) return;
+            Undo.RecordObject(level, "Toggle Guardrail Floating");
+            var p = level.points[anchorIdx];
+            p.guardRailFloating = !p.guardRailFloating;
+            level.points[anchorIdx] = p;
+            Save();
+            Repaint();
         }
 
         struct Pick { public DragKind kind; public int index; }
@@ -1165,7 +1293,15 @@ namespace Dio.Level.EditorTools
                     float h = Mathf.Lerp(startH, endH, t);
                     pts[s] = dir * h;
                 }
-                DrawPolyline(pts, new Color(0.40f, 0.78f, 1.00f, 1f), 3f);
+                // Edge color reflects the start anchor's rail style flag —
+                // orange for floating skirts (loop / elevated sections),
+                // blue for the default ground-anchored rail. Constant across
+                // modes so the user has a stable visual reference even when
+                // not in Edit Guardrails mode.
+                Color edgeColor = level.points[i].guardRailFloating
+                    ? new Color(1.00f, 0.55f, 0.30f, 1f)
+                    : new Color(0.40f, 0.78f, 1.00f, 1f);
+                DrawPolyline(pts, edgeColor, 3f);
             }
 
             // Handle leashes — a handle dot sits at its anchor's resolved
