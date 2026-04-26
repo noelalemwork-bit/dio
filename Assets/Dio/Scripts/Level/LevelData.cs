@@ -48,6 +48,9 @@ namespace Dio.Level
     [CreateAssetMenu(menuName = "Dio/Level Data", fileName = "NewLevel")]
     public class LevelData : ScriptableObject
     {
+        [Tooltip("Display name shown in the lobby. MUST be unique within an owner's level collection — the network-side catalog is keyed by (owner connection id, displayName).")]
+        public string displayName = "";
+
         [Tooltip("Designer-facing 'how far around the planet you'd drive', in world units. Internally we resolve a nominal radius = circumference / 2π.")]
         public float circumference = 1256.6f;   // ≈ 2π * 200, matches the legacy 200u radius
 

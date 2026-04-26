@@ -239,7 +239,10 @@ namespace Dio.UI.EditorTools
             // Populate the level catalog from every LevelData asset under
             // Assets/Dio/Levels (sorted by file name). The host's vote on
             // this catalog is the authoritative pick at race start.
-            mgr.levelCatalog = LoadLevelCatalog();
+            // The runtime catalog is built at startup by every peer scanning
+            // their own LevelData assets — no static catalog wiring here.
+            // Old code stamped a `levelCatalog` array into the prefab; that's
+            // gone, so we don't carry stale info across rebuilds.
 
             // Populate spawnPrefabs so base NetworkManager.OnStartClient auto-registers
             // every networked prefab. Without this, server-spawned cars / obstacles
@@ -1042,25 +1045,12 @@ namespace Dio.UI.EditorTools
             Debug.Log($"[Dio] Built Main scene at {MainScenePath}");
         }
 
-        // ---------- level catalog ----------
-
-        // Pulls every LevelData under Assets/Dio/Levels (sorted by file name)
-        // for the host to vote on. New levels created with Tools → Dio →
-        // New Level land in this folder, so they auto-appear in the lobby.
-        static LevelData[] LoadLevelCatalog()
-        {
-            var guids = AssetDatabase.FindAssets("t:LevelData", new[] { LevelsDir });
-            var paths = new System.Collections.Generic.List<string>(guids.Length);
-            foreach (var g in guids) paths.Add(AssetDatabase.GUIDToAssetPath(g));
-            paths.Sort();
-            var list = new System.Collections.Generic.List<LevelData>(paths.Count);
-            foreach (var p in paths)
-            {
-                var lvl = AssetDatabase.LoadAssetAtPath<LevelData>(p);
-                if (lvl != null) list.Add(lvl);
-            }
-            return list.ToArray();
-        }
+        // The level catalog is now scanned at runtime by every peer via
+        // `Dio.Level.LevelLibrary.ScanLocal()` — see DioPlayer.OnStartLocalPlayer
+        // which uploads each scanned level to the server, and
+        // DioNetworkManager.BroadcastManifest which mirrors the aggregated
+        // catalog onto every connected client. No static array is baked
+        // into the network-manager prefab anymore.
 
         // Card template — title at top, voter dot row at bottom, two
         // visibility-toggled rings (gold = host's pick, lighter player-color

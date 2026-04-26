@@ -25,24 +25,40 @@ namespace Dio.Net
         [Tooltip("Car prefabs to choose from randomly on race start. Each must be built from a VehicleProfile using CarPrefabBuilder.")]
         public GameObject[] carPrefabs;
 
-        [Tooltip("Fallback level if no level is selected (no players have voted, no host pick yet).")]
+        [Tooltip("Fallback level if no client has uploaded any to the runtime catalog yet (e.g. solo-bypass before lobby is wired up).")]
         public Dio.Level.LevelData defaultLevel;
-
-        [Tooltip("Levels selectable from the lobby. Index 0 is the suggested default. The host's preferredLevelIndex picks one from here.")]
-        public Dio.Level.LevelData[] levelCatalog;
 
         public DioNetworkDiscovery discovery;
 
-        public int CatalogSize => levelCatalog != null ? levelCatalog.Length : 0;
+        // Server-side runtime catalog of every uploaded level, keyed by
+        // (ownerConnId, displayName). Filled lazily as PlayerLevelUploadMessage
+        // arrives; cleared per-player on disconnect. Re-broadcast as a
+        // PlayerLevelManifestMessage every time it changes so the lobby UI
+        // and every client's local cache stay in lockstep with the server.
+        readonly Dictionary<(int conn, string name), Dio.Level.LevelData> _runtimeCatalog
+            = new Dictionary<(int, string), Dio.Level.LevelData>();
+
+        // Client-side replica of the manifest. Built from the latest
+        // PlayerLevelManifestMessage; lobby UI reads this to render entries.
+        public static PlayerLevelManifestEntry[] CachedManifest = new PlayerLevelManifestEntry[0];
+        public static System.Action OnManifestChanged;
+
+        public int CatalogSize => _runtimeCatalog.Count;
+
+        public bool RuntimeCatalogHas(int connId, string displayName)
+            => !string.IsNullOrEmpty(displayName) && _runtimeCatalog.ContainsKey((connId, displayName));
 
         // Active level for the running race — set when ServerStartRace picks
         // from the catalog; consulted by RaceBootstrap so clients build the
         // visuals against the same level the server simulates.
         public Dio.Level.LevelData ActiveLevel => _activeLevel != null ? _activeLevel : defaultLevel;
+        public Dio.Level.LevelData ActiveLevelInternal => _activeLevel;
         Dio.Level.LevelData _activeLevel;
 
-        // Resolve which level the host wants to play. Falls back from the
-        // host's vote → first catalog entry → defaultLevel.
+        // Resolve which level the host wants to play, by (host vote owner,
+        // host vote displayName) keyed into the runtime catalog. Falls back
+        // through any catalog entry the host can see, then `defaultLevel`,
+        // so a host who hasn't picked anything yet still gets a valid race.
         public Dio.Level.LevelData ResolveSelectedLevel()
         {
             DioPlayer host = null;
@@ -50,11 +66,13 @@ namespace Dio.Net
             {
                 if (p != null && p.connectionToClient == NetworkServer.localConnection) { host = p; break; }
             }
-            int idx = host != null ? host.preferredLevelIndex : -1;
-            if (levelCatalog != null && idx >= 0 && idx < levelCatalog.Length && levelCatalog[idx] != null)
-                return levelCatalog[idx];
-            if (levelCatalog != null && levelCatalog.Length > 0 && levelCatalog[0] != null)
-                return levelCatalog[0];
+            if (host != null && host.preferredLevelOwner >= 0
+                && _runtimeCatalog.TryGetValue((host.preferredLevelOwner, host.preferredLevelName ?? string.Empty), out var picked)
+                && picked != null && picked.HasMinimum)
+                return picked;
+            // First valid catalog entry — gives solo-bypass races a track.
+            foreach (var kv in _runtimeCatalog)
+                if (kv.Value != null && kv.Value.HasMinimum) return kv.Value;
             return defaultLevel;
         }
 
@@ -103,6 +121,33 @@ namespace Dio.Net
         {
             base.OnStartServer();
             RegisterAllNetworkedPrefabs();
+            // Server-side per-player level upload + removal handlers.
+            NetworkServer.ReplaceHandler<PlayerLevelUploadMessage>(OnServerLevelUpload);
+            NetworkServer.ReplaceHandler<PlayerLevelRemoveMessage>(OnServerLevelRemove);
+
+            // Seed the runtime catalog with the host's local levels so a solo
+            // host already has the catalog populated before any guest joins.
+            // Using -1 as the host's pre-connection sentinel; OnServerAddPlayer
+            // will rekey to the host's actual conn id when their player object
+            // arrives.
+            _runtimeCatalog.Clear();
+            var hostLibrary = Dio.Level.LevelLibrary.ScanLocal();
+            for (int i = 0; i < hostLibrary.Count; i++)
+            {
+                var lvl = hostLibrary[i];
+                if (lvl == null || !lvl.HasMinimum) continue;
+                Dio.Level.LevelLibrary.NormaliseDisplayName(lvl);
+                _runtimeCatalog[(-1, lvl.displayName)] = lvl;
+            }
+            BroadcastManifest();
+        }
+
+        public override void OnStopServer()
+        {
+            base.OnStopServer();
+            _runtimeCatalog.Clear();
+            CachedManifest = new PlayerLevelManifestEntry[0];
+            OnManifestChanged?.Invoke();
         }
 
         public override void OnStartClient()
@@ -110,7 +155,88 @@ namespace Dio.Net
             base.OnStartClient();
             NetworkClient.ReplaceHandler<RaceStartMessage>(OnClientRaceStart);
             NetworkClient.ReplaceHandler<RaceWonMessage>(OnClientRaceWon);
+            // Client receives manifest snapshots whenever the server's
+            // catalog changes — both at startup AND on every join/leave.
+            NetworkClient.ReplaceHandler<PlayerLevelManifestMessage>(OnClientManifest);
             RegisterAllNetworkedPrefabs();
+        }
+
+        [Server]
+        void OnServerLevelUpload(NetworkConnectionToClient conn, PlayerLevelUploadMessage msg)
+        {
+            if (msg.level == null) return;
+            Dio.Level.LevelLibrary.NormaliseDisplayName(msg.level);
+            string n = string.IsNullOrEmpty(msg.level.displayName) ? "(unnamed)" : msg.level.displayName;
+            _runtimeCatalog[(conn.connectionId, n)] = msg.level;
+            // Promote any "pre-connection host upload" rows (key -1) onto the
+            // host's actual connection id once the server's local NetworkClient
+            // shows up. This way the host's levels appear under the host name
+            // in the manifest, not under a sentinel.
+            if (conn == NetworkServer.localConnection)
+            {
+                var stale = new List<string>();
+                foreach (var kv in _runtimeCatalog)
+                    if (kv.Key.conn == -1) stale.Add(kv.Key.name);
+                foreach (var name in stale)
+                {
+                    if (_runtimeCatalog.TryGetValue((-1, name), out var lvl))
+                    {
+                        _runtimeCatalog.Remove((-1, name));
+                        _runtimeCatalog[(conn.connectionId, name)] = lvl;
+                    }
+                }
+            }
+            BroadcastManifest();
+        }
+
+        [Server]
+        void OnServerLevelRemove(NetworkConnectionToClient conn, PlayerLevelRemoveMessage msg)
+        {
+            if (string.IsNullOrEmpty(msg.displayName)) return;
+            _runtimeCatalog.Remove((conn.connectionId, msg.displayName));
+            BroadcastManifest();
+        }
+
+        [Server]
+        void RemovePlayerLevels(int connId)
+        {
+            var stale = new List<(int, string)>();
+            foreach (var kv in _runtimeCatalog)
+                if (kv.Key.conn == connId) stale.Add(kv.Key);
+            foreach (var k in stale) _runtimeCatalog.Remove(k);
+        }
+
+        [Server]
+        void BroadcastManifest()
+        {
+            var entries = new List<PlayerLevelManifestEntry>(_runtimeCatalog.Count);
+            foreach (var kv in _runtimeCatalog)
+            {
+                string ownerName = "";
+                if (kv.Key.conn >= 0 && _players.TryGetValue(kv.Key.conn, out var pl) && pl != null)
+                    ownerName = pl.playerName;
+                else if (kv.Key.conn == -1)
+                    ownerName = HostName;
+                entries.Add(new PlayerLevelManifestEntry
+                {
+                    ownerConnId = kv.Key.conn,
+                    ownerName   = ownerName,
+                    displayName = kv.Key.name,
+                    level       = kv.Value,
+                });
+            }
+            var msg = new PlayerLevelManifestMessage { entries = entries.ToArray() };
+            NetworkServer.SendToAll(msg);
+            // Mirror the server's catalog onto its own static cache so the
+            // local lobby UI updates without waiting for a network round-trip.
+            CachedManifest = msg.entries;
+            OnManifestChanged?.Invoke();
+        }
+
+        void OnClientManifest(PlayerLevelManifestMessage msg)
+        {
+            CachedManifest = msg.entries ?? new PlayerLevelManifestEntry[0];
+            OnManifestChanged?.Invoke();
         }
 
         // base.OnStartClient already registers playerPrefab + spawnPrefabs, but
@@ -157,6 +283,11 @@ namespace Dio.Net
         public override void OnServerDisconnect(NetworkConnectionToClient conn)
         {
             _players.Remove(conn.connectionId);
+            // Drop every level this player had uploaded. The manifest is
+            // rebroadcast so the lobby UI on every remaining peer prunes
+            // the entries automatically.
+            RemovePlayerLevels(conn.connectionId);
+            BroadcastManifest();
             base.OnServerDisconnect(conn);
             DioPlayer.OnRosterChanged?.Invoke();
         }
@@ -190,27 +321,24 @@ namespace Dio.Net
                 return;
             }
 
-            // Embed the selected level's catalog index (canonical) + GUID
-            // (debug-only) in the start message so clients can pick the
-            // matching asset from their catalog. The catalog itself is
-            // serialised on every clone via the DioNetworkManager prefab
-            // built by `Tools → Dio → Build → Network Manager Prefab`.
-            int lvlIndex = -1;
-            if (levelCatalog != null)
+            // Identify the chosen level by (ownerConnId, displayName) and
+            // include the FULL serialized payload as well — every client
+            // builds their visual scene directly from the message instead
+            // of relying on a local-asset lookup that may be missing or
+            // stale. ownerConnId is the runtime-catalog key, not a Mirror
+            // connection field — we look it up via the runtime catalog.
+            int ownerConnId = -1;
+            string ownerKeyName = _activeLevel.displayName ?? string.Empty;
+            foreach (var kv in _runtimeCatalog)
             {
-                for (int i = 0; i < levelCatalog.Length; i++)
-                    if (levelCatalog[i] == _activeLevel) { lvlIndex = i; break; }
+                if (kv.Value == _activeLevel) { ownerConnId = kv.Key.conn; ownerKeyName = kv.Key.name; break; }
             }
-            string lvlGuid = string.Empty;
-#if UNITY_EDITOR
-            string p2p = UnityEditor.AssetDatabase.GetAssetPath(_activeLevel);
-            if (!string.IsNullOrEmpty(p2p)) lvlGuid = UnityEditor.AssetDatabase.AssetPathToGUID(p2p);
-#endif
 
             var msg = new RaceStartMessage
             {
-                levelGuid = lvlGuid,
-                levelCatalogIndex = lvlIndex,
+                levelOwnerConnId = ownerConnId,
+                levelDisplayName = ownerKeyName,
+                level = _activeLevel,
                 seed = Random.Range(int.MinValue, int.MaxValue),
                 // Long delay so the cinematic intro gets time to swoop the
                 // camera in + run the 3-2-1-GO! countdown. RaceIntro on each
@@ -218,7 +346,7 @@ namespace Dio.Net
                 startServerTime = NetworkTime.time + 4.0,
             };
 
-            Debug.Log($"[Dio] ServerStartRace level='{_activeLevel.name}' catalogIndex={lvlIndex} guid={lvlGuid}");
+            Debug.Log($"[Dio] ServerStartRace level='{_activeLevel.name}' (display='{ownerKeyName}', owner={ownerConnId})");
 
             // Build the server-side planet FIRST so newly-spawned cars can find it
             // in their Awake. Otherwise SphericalGravity has nothing to fall back to.
@@ -396,12 +524,19 @@ namespace Dio.Net
             Vector3 tangent  = (dirAhead - midDir).normalized;
             if (tangent.sqrMagnitude < 1e-6f) tangent = Dio.Level.GeodesicUtil.TangentAt(a, b);
 
-            float yOffset  = Mathf.Lerp(lvl.points[from].yOffset, lvl.points[to].yOffset, MidT);
-            float surfaceR = raycaster != null ? raycaster.ResolveSurfaceRadius(midDir) : lvl.NominalRadius;
+            // Lerp the two ENDPOINT heights — same shape rule TrackBuilder
+            // uses, so the powerup row sits at the same height the ribbon
+            // does (per-sample raycast at the midpoint introduced visible
+            // height pops when the two endpoints had different yOffsets).
+            float startSurfaceR = raycaster != null ? raycaster.ResolveSurfaceRadius(a) : lvl.NominalRadius;
+            float endSurfaceR   = raycaster != null ? raycaster.ResolveSurfaceRadius(b) : lvl.NominalRadius;
+            float startH = startSurfaceR + lvl.points[from].yOffset;
+            float endH   = endSurfaceR   + lvl.points[to].yOffset;
+            float midH   = Mathf.Lerp(startH, endH, MidT);
             // Lift boxes a metre above the surface so the chassis pivot can
             // pass under them but the bounds intersect a normal car.
             const float Lift = 1.0f;
-            Vector3 mid = midDir * (surfaceR + yOffset + Lift);
+            Vector3 mid = midDir * (midH + Lift);
 
             // Right vector in the local tangent plane: up × forward.
             Vector3 right = Vector3.Cross(midDir, tangent).normalized;

@@ -102,12 +102,17 @@ namespace Dio.Player
 
         public float CurrentSteerAngle => _currentSteer;
 
+        // Captured at Awake so surface drag multipliers can be applied per-
+        // frame without compounding across ticks.
+        float baseLinearDamping;
+
         void Awake()
         {
             _rb = GetComponent<Rigidbody>();
             _gravity = GetComponent<SphericalGravity>();
             _dioCar = GetComponent<Dio.Player.DioCar>();
             _rb.centerOfMass = new Vector3(0f, -0.4f, 0f);
+            baseLinearDamping = _rb.linearDamping;
             // Cache wheel radius from one of the wheels for spin computation.
             if (frontAxle != null && frontAxle.left != null) _wheelRadiusCached = frontAxle.left.radius;
             else if (rearAxle != null && rearAxle.left != null) _wheelRadiusCached = rearAxle.left.radius;
@@ -248,6 +253,26 @@ namespace Dio.Player
             float brakeAmt = brake ? brakeTorque : 0f;
             float hbAmt = handbrake ? handbrakeTorque : 0f;
 
+            // Surface-aware physics: query the wheels' current contact for a
+            // SurfaceComponent. If found, multiply drive/brake by the surface
+            // profile so ice slips, dirt drags, magnetic grips, etc. Default
+            // (asphalt or no component) is 1.0 across the board.
+            var surface = SampleSurfaceFromAxles();
+            drive    *= surface.forwardFrictionMultiplier;
+            brakeAmt *= surface.brakeMultiplier;
+            hbAmt    *= surface.brakeMultiplier;
+            // Drag multiplier folds into _rb.linearDamping per-frame so the
+            // surface effect persists even when the wheels lift briefly off
+            // the ground (e.g. tiny bumps mid-corner). We restore the base
+            // value before applying so successive frames don't compound.
+            if (_rb != null) _rb.linearDamping = baseLinearDamping * surface.dragMultiplier;
+            // Boost surfaces fire a one-shot impulse along the surface up.
+            if (surface.launchImpulse > 0.01f && _rb != null && AnyWheelGrounded)
+            {
+                Vector3 surfUp = _gravity != null ? _gravity.PlanetUp : transform.up;
+                _rb.AddForce(surfUp * surface.launchImpulse, ForceMode.VelocityChange);
+            }
+
             ApplyMotor(frontAxle, frontAxle.drives ? drive : 0f, brakeAmt);
             ApplyMotor(rearAxle, rearAxle.drives ? drive : 0f, brakeAmt + hbAmt);
 
@@ -289,6 +314,48 @@ namespace Dio.Player
         static bool WheelGrounded(Axle axle)
         {
             return (axle.left != null && axle.left.isGrounded) || (axle.right != null && axle.right.isGrounded);
+        }
+
+        // Inspect each wheel's current ground contact for a SurfaceComponent.
+        // Multiple wheels can disagree on ground type (e.g. one off the
+        // track), so we average their property profiles weighted by the
+        // number of grounded wheels. If no wheel is grounded, return Asphalt
+        // as a stable neutral default.
+        Dio.Level.SurfaceProperties SampleSurfaceFromAxles()
+        {
+            int count = 0;
+            float fF = 0, fS = 0, fD = 0, fB = 0, fLI = 0;
+            void Sample(WheelCollider w)
+            {
+                if (w == null || !w.isGrounded) return;
+                if (!w.GetGroundHit(out WheelHit hit)) return;
+                var col = hit.collider;
+                Dio.Level.SurfaceType type = Dio.Level.SurfaceType.Asphalt;
+                if (col != null)
+                {
+                    var sc = col.GetComponentInParent<Dio.Level.SurfaceComponent>();
+                    if (sc != null) type = sc.type;
+                }
+                var props = Dio.Level.SurfacePropertyTable.Get(type);
+                fF += props.forwardFrictionMultiplier;
+                fS += props.sidewaysFrictionMultiplier;
+                fD += props.dragMultiplier;
+                fB += props.brakeMultiplier;
+                fLI += props.launchImpulse;
+                count++;
+            }
+            if (frontAxle != null) { Sample(frontAxle.left); Sample(frontAxle.right); }
+            if (rearAxle  != null) { Sample(rearAxle.left);  Sample(rearAxle.right); }
+            if (count == 0) return Dio.Level.SurfacePropertyTable.Get(Dio.Level.SurfaceType.Asphalt);
+            float inv = 1f / count;
+            return new Dio.Level.SurfaceProperties
+            {
+                forwardFrictionMultiplier  = fF * inv,
+                sidewaysFrictionMultiplier = fS * inv,
+                dragMultiplier             = fD * inv,
+                brakeMultiplier            = fB * inv,
+                launchImpulse              = fLI * inv,
+            };
         }
     }
 }

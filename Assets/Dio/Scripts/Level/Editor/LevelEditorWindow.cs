@@ -72,6 +72,38 @@ namespace Dio.Level.EditorTools
         Material _previewGuardMat;
         int _previewLevelHash;
 
+        // Per-anchor radial height cache. Computing these via raycaster on
+        // every OnGUI was the editor's #1 perf hit — N anchors × the FBX's
+        // few-thousand triangles per `ResolveSurfaceRadius` call, every
+        // frame. Now they recompute only when the level structurally
+        // changes (same key as the preview track rebuild) or when the
+        // raycaster itself changes.
+        readonly System.Collections.Generic.Dictionary<int, float> _anchorHeightCache = new System.Collections.Generic.Dictionary<int, float>();
+        int _heightCacheLevelHash;
+        GlobeRaycaster _heightCacheRaycaster;
+
+        float CachedAnchorHeight(int anchorIdx)
+        {
+            if (_heightCacheLevelHash != _previewLevelHash || _heightCacheRaycaster != _raycaster)
+            {
+                _anchorHeightCache.Clear();
+                _heightCacheLevelHash = _previewLevelHash;
+                _heightCacheRaycaster = _raycaster;
+            }
+            if (_anchorHeightCache.TryGetValue(anchorIdx, out float h)) return h;
+            h = level.ResolveHeight(anchorIdx, _raycaster);
+            _anchorHeightCache[anchorIdx] = h;
+            return h;
+        }
+
+        // Cached SURFACE radius (= without yOffset). Used by the yOffset
+        // arrow path so it can show "from surface to lifted position" cleanly.
+        float CachedAnchorSurfaceR(int anchorIdx)
+        {
+            float h = CachedAnchorHeight(anchorIdx);
+            return h - Mathf.Max(0f, level.points[anchorIdx].yOffset);
+        }
+
         // Camera state. Stored as a full Quaternion (not yaw/pitch) so the
         // user can sweep across poles freely.
         Quaternion _orientation = Quaternion.LookRotation(
@@ -267,6 +299,25 @@ namespace Dio.Level.EditorTools
             }
 
             EditorGUI.BeginChangeCheck();
+
+            // Display name + uniqueness check. Empty field auto-fills to the
+            // file name on first scan; a user-typed name that collides with
+            // another level is shown in red and refused on save (we still
+            // accept the typed value into the field so the user can correct).
+            string newName = EditorGUILayout.TextField("Display name", level.displayName ?? string.Empty);
+            if (newName != level.displayName)
+            {
+                level.displayName = newName;
+            }
+            if (!string.IsNullOrWhiteSpace(level.displayName)
+                && Dio.Level.LevelLibrary.IsDisplayNameTaken(level, level.displayName))
+            {
+                EditorGUILayout.HelpBox(
+                    $"Display name \"{level.displayName}\" collides with another level. " +
+                    "Pick a unique name — the network catalog keys by (owner, displayName).",
+                    MessageType.Error);
+            }
+
             level.circumference = Mathf.Max(1f, EditorGUILayout.FloatField("Circumference", level.circumference));
             level.trackWidth = EditorGUILayout.FloatField("Track width (canonical)", level.trackWidth);
             level.trackRatio = Mathf.Max(0.05f, EditorGUILayout.FloatField("Track width ratio", level.trackRatio));
@@ -699,16 +750,33 @@ namespace Dio.Level.EditorTools
             int oldCount = level.points.Count;
             var oldEndpoint = level.points[endpoint];
 
+            // Build the clone with appropriate handles preserved:
+            //   * Prepend: the OLD start had outHandle pointing at the old
+            //     chain. The CLONE becomes the new start (root, no inHandle).
+            //     We zero BOTH handles on the clone — the OLD start retains
+            //     its original outHandle for the now-existing edge into the
+            //     old chain.
+            //   * Append: the OLD finish had inHandle pointing at the old
+            //     chain. The CLONE keeps that inHandle (so the segment from
+            //     [..,B] into the clone is unchanged), and clears outHandle
+            //     (we'll set it below via C1 reflection so the new edge
+            //     CLONE→DRAGGED_OLD_FINISH continues the existing tangent).
             var clone = oldEndpoint;
-            clone.inHandle = Vector3.zero;
-            clone.outHandle = Vector3.zero;
             clone.next = new List<int>();
+            if (endpoint == 0)
+            {
+                clone.inHandle = Vector3.zero;
+                clone.outHandle = Vector3.zero;
+            }
+            else
+            {
+                // clone.inHandle preserved (= old chain shape).
+                clone.outHandle = Vector3.zero;
+            }
 
             int draggedIdx;
             if (endpoint == 0)
             {
-                // Prepend: clone takes index 0, old start shifts to index 1.
-                // Every existing next entry shifts +1.
                 level.points.Insert(0, clone);
                 draggedIdx = 1;
                 for (int i = 0; i < level.points.Count; i++)
@@ -718,40 +786,40 @@ namespace Dio.Level.EditorTools
                         for (int k = 0; k < pp.next.Count; k++) pp.next[k] += 1;
                     level.points[i] = pp;
                 }
-                // Wire the new start to the (shifted) old start.
                 var c = level.points[0];
                 if (c.next == null) c.next = new List<int>();
                 if (!c.next.Contains(1)) c.next.Add(1);
                 level.points[0] = c;
+                // The OLD start (now at index 1, dragged) had no inHandle.
+                // We'll set it via C1 reflection in ResetExtendHandles using
+                // the still-preserved outHandle as the authoritative side.
             }
             else
             {
-                // Append: clone takes the OLD endpoint's index, old endpoint
-                // shifts to (endpoint + 1). Existing edges that pointed to
-                // the OLD endpoint now correctly point to CLONE (same index,
-                // newly inserted entity) — DON'T shift those. Only entries
-                // pointing to indices STRICTLY GREATER than `endpoint` need
-                // to shift, since those entities just moved one slot down.
                 level.points.Insert(endpoint, clone);
                 draggedIdx = endpoint + 1;
                 for (int i = 0; i < level.points.Count; i++)
                 {
-                    if (i == endpoint) continue; // the clone itself, no edges yet
+                    if (i == endpoint) continue;
                     var pp = level.points[i];
                     if (pp.next != null)
                         for (int k = 0; k < pp.next.Count; k++)
                             if (pp.next[k] > endpoint) pp.next[k] += 1;
                     level.points[i] = pp;
                 }
-                // Wire the clone (now at `endpoint`) to the shifted old endpoint.
                 var c = level.points[endpoint];
                 if (c.next == null) c.next = new List<int>();
                 if (!c.next.Contains(endpoint + 1)) c.next.Add(endpoint + 1);
                 level.points[endpoint] = c;
+                // Clear the dragged old endpoint's inHandle — it was the
+                // bezier control on the OLD segment B→X. The new edge
+                // CLONE→OLD_X is a different bezier; ResetExtendHandles will
+                // set a fresh inHandle for it.
+                var o = level.points[endpoint + 1];
+                o.inHandle = Vector3.zero;
+                level.points[endpoint + 1] = o;
             }
 
-            // Safety net — fills in any other missing linear-chain links and
-            // normalises null next lists (no-op when everything was wired).
             level.EnsureLinearChainNext();
 
             _dragKind = DragKind.ShiftExtend;
@@ -762,8 +830,6 @@ namespace Dio.Level.EditorTools
                 ResetExtendHandles(draggedIdx);
             }
 
-            // Sanity check — every anchor must be reachable (no orphans).
-            // Logging at edit-time so a future regression surfaces immediately.
             int reachableCount = CountReachableFromAnchor0();
             if (reachableCount != level.points.Count)
                 Debug.LogWarning($"[Dio Level Editor] Extend left {level.points.Count - reachableCount} orphan anchor(s). prevCount={oldCount} newCount={level.points.Count}");
@@ -809,29 +875,60 @@ namespace Dio.Level.EditorTools
             level.points[i] = p;
         }
 
+        // Set up handles for the new bezier added by extend. Uses the
+        // "midpoints opposite" policy: at the joint where the new bezier
+        // meets the existing chain, the new control point is the REFLECTION
+        // of the preserved one through the tangent plane (C1 continuity),
+        // not just a fresh geodesic midpoint. The dragged endpoint gets a
+        // simple geodesic midpoint with the joint, since there's no other
+        // chain segment past it to constrain.
         void ResetExtendHandles(int newIndex)
         {
             int prevIndex = (newIndex == 0) ? 1 : newIndex - 1;
             Vector3 A = level.DirOf(prevIndex);
             Vector3 B = level.DirOf(newIndex);
-            Vector3 M = Vector3.Slerp(A, B, 0.5f).normalized;
+            Vector3 fallbackM = Vector3.Slerp(A, B, 0.5f).normalized;
 
             var prev = level.points[prevIndex];
             var nw   = level.points[newIndex];
             if (newIndex > prevIndex)
             {
-                prev.outHandle = M;
-                nw.inHandle = M;
+                // Append: prev is the inserted clone. clone.IN was preserved
+                // from the old chain. Reflect to compute clone.OUT (this is
+                // the "midpoints opposite" policy). Dragged.IN: midpoint.
+                prev.outHandle = ReflectHandleThroughTangent(prev.inHandle, A);
+                if (prev.outHandle.sqrMagnitude < 1e-6f) prev.outHandle = fallbackM;
+                nw.inHandle = fallbackM;
             }
             else
             {
-                prev.inHandle = M;
-                nw.outHandle = M;
+                // Prepend: nw is the dragged OLD start (now interior at idx 1).
+                // It has the preserved old outHandle (= the segment to the
+                // old chain). Reflect to compute its inHandle for C1 across
+                // the new joint. Clone.OUT: midpoint with the dragged anchor.
+                nw.inHandle = ReflectHandleThroughTangent(nw.outHandle, B);
+                if (nw.inHandle.sqrMagnitude < 1e-6f) nw.inHandle = fallbackM;
+                prev.outHandle = fallbackM;
             }
             level.points[prevIndex] = prev;
             level.points[newIndex]  = nw;
+        }
 
-            EnforceContinuity(prevIndex, preferReflectInFromOut: newIndex > prevIndex);
+        // Reflect a unit-direction handle through the tangent plane at
+        // `anchorDir` — i.e. flip its tangent component while preserving its
+        // angular distance from the anchor. The result is "the opposite of
+        // the input handle" in the sense the user described: same magnitude,
+        // pointing the other way along the surface.
+        static Vector3 ReflectHandleThroughTangent(Vector3 handle, Vector3 anchorDir)
+        {
+            if (handle.sqrMagnitude < 1e-6f) return Vector3.zero;
+            Vector3 P = anchorDir.normalized;
+            Vector3 h = handle.normalized;
+            Vector3 t = h - Vector3.Dot(h, P) * P;
+            if (t.sqrMagnitude < 1e-8f) return Vector3.zero;
+            t.Normalize();
+            float ang = Mathf.Acos(Mathf.Clamp(Vector3.Dot(P, h), -1f, 1f));
+            return (Mathf.Cos(ang) * P + Mathf.Sin(ang) * (-t)).normalized;
         }
 
         void SetHandle(int anchor, DragKind kind, Vector3 newDir)
@@ -1022,22 +1119,23 @@ namespace Dio.Level.EditorTools
 
             Vector3 camDir = ComputeCameraPosition().normalized;
 
-            // Beziers between connected anchors. Each sample's height comes
-            // from the raycaster so the polyline snaps to the same surface
-            // the actual track mesh uses.
+            // Beziers between connected anchors. We LERP the two endpoint
+            // heights across the bezier, matching what TrackBuilder.Build
+            // does — per-sample raycast on the polyline produced visible
+            // jitter near steep terrain AND was the editor's biggest
+            // per-frame cost (N edges × BezierSegments raycasts every OnGUI).
             foreach (var (i, j) in level.EnumerateEdges())
             {
                 level.GetEdge(i, j, out Vector3 a, out Vector3 ah, out Vector3 bh, out Vector3 b);
-                float yI = level.points[i].yOffset;
-                float yJ = level.points[j].yOffset;
+                float startH = CachedAnchorHeight(i);
+                float endH   = CachedAnchorHeight(j);
                 var pts = new Vector3[BezierSegments + 1];
                 for (int s = 0; s <= BezierSegments; s++)
                 {
                     float t = (float)s / BezierSegments;
                     Vector3 dir = GeodesicUtil.SphericalBezier(a, ah, bh, b, t);
-                    float surfaceR = _raycaster != null ? _raycaster.ResolveSurfaceRadius(dir) : level.NominalRadius;
-                    float y = Mathf.Lerp(yI, yJ, t);
-                    pts[s] = dir * (surfaceR + y);
+                    float h = Mathf.Lerp(startH, endH, t);
+                    pts[s] = dir * h;
                 }
                 DrawPolyline(pts, new Color(0.40f, 0.78f, 1.00f, 1f), 3f);
             }
@@ -1052,7 +1150,7 @@ namespace Dio.Level.EditorTools
                 bool anchorVisible = Vector3.Dot(anchorDir, camDir) > 0f;
                 bool hasIn  = p.inHandle.sqrMagnitude  > 1e-6f;
                 bool hasOut = p.outHandle.sqrMagnitude > 1e-6f;
-                float anchorH = level.ResolveHeight(i, _raycaster);
+                float anchorH = CachedAnchorHeight(i);
 
                 if (anchorVisible && hasIn  && Vector3.Dot(p.inHandle.normalized,  camDir) > 0f)
                     DrawHandleLeash(anchorDir, p.inHandle.normalized, anchorH);
@@ -1066,7 +1164,7 @@ namespace Dio.Level.EditorTools
             {
                 Vector3 dir = level.DirOf(i);
                 if (Vector3.Dot(dir, camDir) <= 0f) continue;
-                float anchorH = level.ResolveHeight(i, _raycaster);
+                float anchorH = CachedAnchorHeight(i);
                 Vector3 wp = dir * anchorH;
                 if (!TryWorldToScreen(wp, out Vector2 sp)) continue;
                 Color col = i == 0 ? new Color(1f, 0.30f, 0.30f, 1f)
@@ -1085,7 +1183,7 @@ namespace Dio.Level.EditorTools
                 var p = level.points[i];
                 bool hasIn  = p.inHandle.sqrMagnitude  > 1e-6f;
                 bool hasOut = p.outHandle.sqrMagnitude > 1e-6f;
-                float anchorH = level.ResolveHeight(i, _raycaster);
+                float anchorH = CachedAnchorHeight(i);
                 if (hasIn && Vector3.Dot(p.inHandle.normalized, camDir) > 0f
                     && TryWorldToScreen(p.inHandle.normalized * anchorH, out Vector2 sIn))
                     DrawDot(sIn, HandleDotRadius, new Color(1f, 0.85f, 0.30f, 1f));
@@ -1104,7 +1202,7 @@ namespace Dio.Level.EditorTools
                 {
                     Vector3 dir = level.DirOf(i);
                     if (Vector3.Dot(dir, camDir) <= 0f) continue;
-                    float surfaceR = _raycaster != null ? _raycaster.ResolveSurfaceRadius(dir) : level.NominalRadius;
+                    float surfaceR = CachedAnchorSurfaceR(i);
                     Vector3 basePos = dir * surfaceR;
                     Vector3 liftedPos = basePos + dir * level.points[i].yOffset;
                     if (!TryWorldToScreen(liftedPos, out Vector2 sp)) continue;

@@ -106,21 +106,29 @@ namespace Dio.Level
             /// the user-visible "height of the road above the planet" reads
             /// naturally on screen.
             public bool floorAtSurface;
-            /// When true, build a lateral wall at each open endpoint of the
-            /// chain (start anchor with no incoming edges, finish anchor with
-            /// no outgoing). Used for start gates / finish lines.
+            /// Combined toggle. When true, both start and finish endcaps are
+            /// emitted. Kept for callers that don't care about the asymmetry.
             public bool addEndcaps;
+            /// When true, emit a perpendicular wall at the start anchor.
+            /// Usually FALSE when the spawn pad supplies its own back wall —
+            /// otherwise two parallel walls land right behind the polesitter.
+            public bool addStartEndcap;
+            /// When true, emit a perpendicular wall at the finish anchor —
+            /// the canonical "finish line" wall.
+            public bool addFinishEndcap;
 
             public static GuardOptions Default => new GuardOptions
             {
-                crossSection   = GuardCrossSection.Full,
-                wallHeight     = 2.2f,
-                lipOutward     = 0.4f,
-                skirtDepth     = 1f,
-                floorPad       = DefaultFloorPad,
-                outwardOffset  = 0.05f,
-                floorAtSurface = true,
-                addEndcaps     = false,
+                crossSection    = GuardCrossSection.Full,
+                wallHeight      = 2.2f,
+                lipOutward      = 0.4f,
+                skirtDepth      = 1f,
+                floorPad        = DefaultFloorPad,
+                outwardOffset   = 0.05f,
+                floorAtSurface  = true,
+                addEndcaps      = false,
+                addStartEndcap  = false,
+                addFinishEndcap = false,
             };
         }
 
@@ -290,14 +298,16 @@ namespace Dio.Level
                     rightStart, SegmentsPerArc - rightEnd, rightVerts, rightTris);
             }
 
-            // Endcap walls at chain endpoints — start anchor has no incoming
-            // edges, finish anchor has no outgoing. Run after the side
-            // guards so the endcap shares the surface raycast already done.
-            if (opt.addEndcaps)
-            {
+            // Endcap walls at chain endpoints. Independent flags so callers
+            // can opt in to just the finish line (typical when the spawn pad
+            // already supplies a wall behind the start anchor). Legacy
+            // combined `addEndcaps` toggles both for back-compat.
+            bool wantStart  = opt.addStartEndcap  || opt.addEndcaps;
+            bool wantFinish = opt.addFinishEndcap || opt.addEndcaps;
+            if (wantStart)
                 AppendEndcap(level, raycaster, opt, leftVerts, leftTris, rightVerts, rightTris, atFinish: false);
+            if (wantFinish)
                 AppendEndcap(level, raycaster, opt, leftVerts, leftTris, rightVerts, rightTris, atFinish: true);
-            }
 
             Mesh BuildMesh(string n, List<Vector3> verts, List<int> tris)
             {

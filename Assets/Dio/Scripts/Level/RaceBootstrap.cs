@@ -64,47 +64,31 @@ namespace Dio.Level
 
         void Start() { if (autoStartInEditor) BuildVisualScene(defaultLevel); }
 
-        // Resolve the server-chosen level on every peer. Priority order:
-        //   1. The host/server's authoritative `_activeLevel` (host case).
-        //   2. The catalog entry at the index sent in the message
-        //      (remote-client case — same catalog wired into the prefab).
-        //   3. The legacy GUID string, only useful in editor play-mode where
-        //      AssetDatabase is available.
-        //   4. The bootstrap's `defaultLevel` field (last-ditch fallback).
-        // Without this, every peer used `defaultLevel` regardless of the
-        // host's vote — the bug behind "only one track loads".
+        // Pull the chosen level out of the start message. The server fills
+        // in the FULL serialized payload, so every peer gets exactly the
+        // host's pick — no asset-resolution dance, no stale local catalog
+        // index. Server-side path uses the live ScriptableObject directly
+        // (which IS the same instance the runtime catalog stored).
         void OnRaceStarted(bool _, RaceStartMessage msg)
         {
-            var lvl = ResolveLevelFromMessage(msg);
-            BuildVisualScene(lvl);
-        }
-
-        Dio.Level.LevelData ResolveLevelFromMessage(RaceStartMessage msg)
-        {
             var mgr = DioNetworkManager.Instance;
-            // Host already has _activeLevel set on server before broadcasting.
-            if (mgr != null && mgr.ActiveLevel != null && mgr.ActiveLevel.HasMinimum)
-                return mgr.ActiveLevel;
+            Dio.Level.LevelData lvl = null;
+            // Host: server-resolved active level is the authoritative copy.
+            if (Mirror.NetworkServer.active && mgr != null && mgr.ActiveLevelInternal != null)
+                lvl = mgr.ActiveLevelInternal;
+            // Otherwise consume the deserialized payload from the message.
+            if (lvl == null) lvl = msg.level;
 
-            // Remote client: pick by catalog index.
-            if (mgr != null && mgr.levelCatalog != null && msg.levelCatalogIndex >= 0
-                && msg.levelCatalogIndex < mgr.levelCatalog.Length
-                && mgr.levelCatalog[msg.levelCatalogIndex] != null)
-                return mgr.levelCatalog[msg.levelCatalogIndex];
-
-#if UNITY_EDITOR
-            if (!string.IsNullOrEmpty(msg.levelGuid))
+            if (lvl == null || !lvl.HasMinimum)
             {
-                string p = UnityEditor.AssetDatabase.GUIDToAssetPath(msg.levelGuid);
-                if (!string.IsNullOrEmpty(p))
-                {
-                    var lvl = UnityEditor.AssetDatabase.LoadAssetAtPath<Dio.Level.LevelData>(p);
-                    if (lvl != null) return lvl;
-                }
+                Debug.LogWarning($"[RaceBootstrap] RaceStartMessage carried no usable level (owner={msg.levelOwnerConnId} name='{msg.levelDisplayName}'). Falling back to defaultLevel.");
+                lvl = defaultLevel;
             }
-#endif
-            Debug.LogWarning($"[RaceBootstrap] could not resolve level from RaceStartMessage (idx={msg.levelCatalogIndex} guid='{msg.levelGuid}'). Falling back to defaultLevel.");
-            return defaultLevel;
+            else
+            {
+                Debug.Log($"[RaceBootstrap] resolved race level '{lvl.displayName}' (owner={msg.levelOwnerConnId}, points={lvl.points.Count})");
+            }
+            BuildVisualScene(lvl);
         }
 
         void OnRaceWon(RaceWonMessage msg)
@@ -253,9 +237,17 @@ namespace Dio.Level
             _spawnPad = new GameObject("SpawnPad");
             _spawnPad.transform.SetParent(_planet != null ? _planet.transform.parent : null, true);
 
-            Shader sh = Shader.Find("Standard");
+            // Same URP-aware shader resolution as the main track. Fallbacks
+            // catch non-URP projects.
+            Shader sh = Shader.Find("Universal Render Pipeline/Lit")
+                        ?? Shader.Find("Universal Render Pipeline/Unlit")
+                        ?? Shader.Find("Standard");
             var asphalt = sh != null ? new Material(sh) { name = "SpawnPad (runtime)" } : null;
-            if (asphalt != null) asphalt.color = new Color(0.18f, 0.18f, 0.20f, 1f);
+            if (asphalt != null)
+            {
+                asphalt.color = new Color(0.10f, 0.10f, 0.12f, 1f);
+                if (asphalt.HasProperty("_BaseColor")) asphalt.SetColor("_BaseColor", asphalt.color);
+            }
 
             var ribbonGo = new GameObject("Ribbon", typeof(MeshFilter), typeof(MeshRenderer), typeof(MeshCollider));
             ribbonGo.transform.SetParent(_spawnPad.transform, false);
@@ -309,7 +301,13 @@ namespace Dio.Level
             opt.outwardOffset = 0.05f;
             opt.floorAtSurface = true;          // skirt always reaches the actual ground
             opt.floorPad = 1f;
-            opt.addEndcaps = true;              // close start gate + finish line
+            // Only the FINISH endpoint gets a perpendicular wall here. The
+            // start anchor's "rear gate" is the far back of the spawn pad —
+            // generating one at the start anchor too would put two parallel
+            // walls right behind the polesitter.
+            opt.addStartEndcap  = false;
+            opt.addFinishEndcap = true;
+            opt.addEndcaps      = false;        // legacy combined toggle
             var (left, right) = TrackBuilder.BuildGuards(level, _raycaster, opt);
             if (left == null || right == null) return;
 
@@ -390,15 +388,26 @@ namespace Dio.Level
             mc.sharedMesh = mesh;
 
             var rend = _track.GetComponent<MeshRenderer>();
-            // Simple asphalt-grey material for now. Could become a Dio/Track shader later.
-            var trackShader = Shader.Find("Standard");
+            // URP project — `Shader.Find("Standard")` returns null and leaves
+            // the material in fallback magenta. Use URP/Lit (with Unlit and
+            // Standard fallbacks for non-URP projects). Same dark asphalt
+            // colour as the guard rails so the rail and ribbon read as one
+            // continuous piece of road.
+            var trackShader = Shader.Find("Universal Render Pipeline/Lit")
+                              ?? Shader.Find("Universal Render Pipeline/Unlit")
+                              ?? Shader.Find("Standard");
             var mat = trackShader != null ? new Material(trackShader) : null;
             if (mat != null)
             {
                 mat.name = "TrackAsphalt (runtime)";
-                mat.color = new Color(0.18f, 0.18f, 0.20f, 1f);
+                mat.color = new Color(0.10f, 0.10f, 0.12f, 1f);
+                if (mat.HasProperty("_BaseColor")) mat.SetColor("_BaseColor", mat.color); // URP/Lit takes _BaseColor
                 rend.sharedMaterial = mat;
             }
+            // Tag the track with its surface type so wheels colliding against
+            // it can pick the right physics profile. Default = asphalt.
+            var surface = _track.AddComponent<SurfaceComponent>();
+            surface.type = SurfaceType.Asphalt;
 
             CurrentTrack = _track;
         }

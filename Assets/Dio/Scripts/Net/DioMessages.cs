@@ -19,14 +19,21 @@ namespace Dio.Net
 
     public struct RaceStartMessage : NetworkMessage
     {
-        // Identifies the level the server picked. Clients with the same
-        // catalog (wired into DioNetworkManager.levelCatalog at build time)
-        // resolve via the index; the GUID is a redundant editor-only
-        // identifier for play-mode debugging.
-        public string levelGuid;
-        public int    levelCatalogIndex;
+        // The level is identified by (ownerConnId, displayName) — every peer
+        // already received the full payload via PlayerLevelManifestEntry, so
+        // the message just names the chosen one. ownerConnId is the host's
+        // own connection id when the host's level was picked.
+        public int    levelOwnerConnId;
+        public string levelDisplayName;
         public int    seed;
         public double startServerTime;
+
+        // Embedded full payload as a fallback. Useful when a late-joining
+        // client hasn't received the manifest entry yet, or when an asset
+        // was pulled from the catalog mid-vote. Server always fills this so
+        // remote clients can build the visual scene without depending on
+        // their own LevelLibrary scan matching.
+        public Dio.Level.LevelData level;
     }
 
     public struct RaceWonMessage : NetworkMessage
@@ -38,5 +45,46 @@ namespace Dio.Net
         // the win popup but the visual scene still tears down. The host
         // immediately follows up with a fresh RaceStartMessage.
         public bool  isRestart;
+    }
+
+    // ---------- Per-player level catalog protocol ----------
+    //
+    // Each peer scans its own local LevelData assets (via LevelLibrary) and
+    // uploads them to the server. The server stores everything keyed by
+    // (ownerConnId, displayName) and broadcasts the aggregated manifest to
+    // every peer so the lobby UI can list every level brought into the room
+    // — host's plus every guest's. When a peer disconnects the server
+    // removes their entries and rebroadcasts.
+
+    /// Client → server. One message per local level.
+    public struct PlayerLevelUploadMessage : NetworkMessage
+    {
+        public Dio.Level.LevelData level;
+    }
+
+    /// Client → server. Sent on disconnect path or when a designer manually
+    /// removes one of their levels.
+    public struct PlayerLevelRemoveMessage : NetworkMessage
+    {
+        public string displayName;
+    }
+
+    /// One row in the aggregated manifest broadcast.
+    public struct PlayerLevelManifestEntry
+    {
+        public int    ownerConnId;
+        public string ownerName;
+        public string displayName;
+        // Full payload included so clients don't need their own copy of the
+        // level to build the scene at race start. Keeps manifest size up,
+        // but avoids round-trip "send me level X" handshakes.
+        public Dio.Level.LevelData level;
+    }
+
+    /// Server → all clients. Full snapshot — clients replace their cached
+    /// catalog wholesale. Sent whenever any player's roster changes.
+    public struct PlayerLevelManifestMessage : NetworkMessage
+    {
+        public PlayerLevelManifestEntry[] entries;
     }
 }

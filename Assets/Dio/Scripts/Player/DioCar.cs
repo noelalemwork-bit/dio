@@ -91,6 +91,13 @@ namespace Dio.Player
         bool _inCountdown;
         Vector3 _countdownStartPos;
         Quaternion _countdownStartRot;
+        // "Rev" buildup during the countdown. Players can hold throttle while
+        // the chassis is frozen; on GO! we translate the accumulated motor
+        // intent into an initial forward velocity so the launch feels like a
+        // burnout / pre-spun set of wheels.
+        float _accumulatedRev;
+        const float RevSecondsCap = 4f;        // matches the countdown lead-in
+        const float RevSecondsToMps = 4.5f;     // 4s held throttle ≈ 18 m/s ≈ 65 km/h launch
 
         void Awake()
         {
@@ -117,12 +124,23 @@ namespace Dio.Player
                 _inCountdown = true;
                 _countdownStartPos = transform.position;
                 _countdownStartRot = transform.rotation;
+                _accumulatedRev = 0f;
             }
         }
 
         void OnCountdownEnd()
         {
+            if (_inCountdown && isOwned && _rb != null && !_rb.isKinematic)
+            {
+                // Translate accumulated rev (= seconds of held throttle, capped)
+                // into a forward launch velocity. Same logic on every owner so
+                // host vs guest cars behave identically — no host advantage.
+                float launchMps = Mathf.Min(_accumulatedRev, RevSecondsCap) * RevSecondsToMps;
+                if (launchMps > 0.01f)
+                    _rb.linearVelocity = transform.forward * launchMps;
+            }
             _inCountdown = false;
+            _accumulatedRev = 0f;
         }
 
         // Owner-only: apply powerup-state input modifications on top of the
@@ -144,10 +162,19 @@ namespace Dio.Player
             // (readLocalInput stays true so it falls back to ReadLocalInputsNow
             // if some other path skips this method.)
 
-            // During countdown, reset velocity to lock position.
+            // During countdown, accumulate the throttle the player is holding
+            // (so we can launch them with a corresponding initial speed at
+            // GO!), but ZERO velocity each tick so the chassis stays put.
+            // ArcadeCarController.inputsLocked is true during this window —
+            // it skips applying motor torque to the wheels — so we don't see
+            // any visible motion until the lock is released.
             if (_inCountdown)
             {
-                _rb.velocity = Vector3.zero;
+                // raw.steerThrottle.y is the [-1..1] throttle axis. Forward
+                // (positive) clipped to [0..1] is the rev contribution.
+                float thr = Mathf.Clamp01(raw.steerThrottle.y);
+                _accumulatedRev += thr * Time.fixedDeltaTime;
+                _rb.linearVelocity = Vector3.zero;
                 _rb.angularVelocity = Vector3.zero;
             }
         }

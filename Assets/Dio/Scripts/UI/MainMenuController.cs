@@ -390,7 +390,12 @@ namespace Dio.UI
         void RefreshLevelGrid(List<DioPlayer> roster, bool isHost)
         {
             if (levelGridRoot == null || levelCardTemplate == null) return;
-            if (net == null || net.levelCatalog == null) { ClearChildren(levelGridRoot, _spawnedLevelCards); return; }
+
+            // Manifest is the source of truth — replicated from the server's
+            // runtime catalog. Empty manifest = nothing to show; the grid
+            // collapses cleanly while we wait for the first broadcast.
+            var manifest = DioNetworkManager.CachedManifest ?? System.Array.Empty<PlayerLevelManifestEntry>();
+            if (manifest.Length == 0) { ClearChildren(levelGridRoot, _spawnedLevelCards); return; }
 
             // Identify the host for the authoritative pick.
             DioPlayer host = null;
@@ -402,21 +407,21 @@ namespace Dio.UI
                     if (p != null && p.connectionToClient == NetworkServer.localConnection) { host = p; break; }
                 }
             }
-            int hostPick = host != null ? host.preferredLevelIndex : -1;
+            int hostPickOwner = host != null ? host.preferredLevelOwner : -1;
+            string hostPickName = host != null ? (host.preferredLevelName ?? string.Empty) : string.Empty;
 
-            // Bucket players by their preferred level.
-            var votesByLevel = new Dictionary<int, List<DioPlayer>>();
+            // Bucket players by their (owner, name) vote.
+            var votesByKey = new Dictionary<(int, string), List<DioPlayer>>();
             foreach (var p in roster)
             {
                 if (p == null) continue;
-                int idx = p.preferredLevelIndex;
-                if (idx < 0) continue;
-                if (!votesByLevel.TryGetValue(idx, out var list)) { list = new List<DioPlayer>(); votesByLevel[idx] = list; }
+                if (p.preferredLevelOwner < 0) continue;
+                var key = (p.preferredLevelOwner, p.preferredLevelName ?? string.Empty);
+                if (!votesByKey.TryGetValue(key, out var list)) { list = new List<DioPlayer>(); votesByKey[key] = list; }
                 list.Add(p);
             }
 
-            // Rebuild the grid.
-            int needed = net.levelCatalog.Length;
+            int needed = manifest.Length;
             while (_spawnedLevelCards.Count < needed)
             {
                 var go = Instantiate(levelCardTemplate, levelGridRoot);
@@ -432,27 +437,36 @@ namespace Dio.UI
 
             for (int i = 0; i < needed; i++)
             {
-                var lvl = net.levelCatalog[i];
+                var entry = manifest[i];
                 var card = _spawnedLevelCards[i];
-                ConfigureLevelCard(card, i, lvl, hostPick == i,
-                    votesByLevel.TryGetValue(i, out var vs) ? vs : null);
+                bool isHostPick = (hostPickOwner == entry.ownerConnId
+                                   && string.Equals(hostPickName, entry.displayName, System.StringComparison.OrdinalIgnoreCase));
+                votesByKey.TryGetValue((entry.ownerConnId, entry.displayName), out var vs);
+                ConfigureLevelCard(card, entry, isHostPick, vs);
             }
         }
 
-        void ConfigureLevelCard(GameObject card, int idx, LevelData lvl, bool isHostPick, List<DioPlayer> voters)
+        void ConfigureLevelCard(GameObject card, PlayerLevelManifestEntry entry, bool isHostPick, List<DioPlayer> voters)
         {
-            // Title.
+            // Title — show "Level Name · by Owner" so room members can tell
+            // whose track this is.
             var title = card.transform.Find("Title")?.GetComponent<TMP_Text>();
-            if (title != null) title.text = lvl != null ? lvl.name : $"Level {idx + 1}";
+            if (title != null)
+            {
+                string nm = string.IsNullOrEmpty(entry.displayName) ? "(unnamed)" : entry.displayName;
+                string owner = string.IsNullOrEmpty(entry.ownerName) ? "?" : entry.ownerName;
+                title.text = $"{nm}\n<size=70%>by {owner}</size>";
+            }
 
             // Host's authoritative pick = a thick gold ring around the card.
             var hostRing = card.transform.Find("HostRing");
             if (hostRing != null) hostRing.gameObject.SetActive(isHostPick);
 
-            // Local player's preference highlight: grow + lighter outline of
-            // their color (same idiom as the swatch).
+            // Local player's preference highlight.
             var local = LocalPlayer;
-            bool isMine = local != null && local.preferredLevelIndex == idx;
+            bool isMine = local != null
+                          && local.preferredLevelOwner == entry.ownerConnId
+                          && string.Equals(local.preferredLevelName, entry.displayName, System.StringComparison.OrdinalIgnoreCase);
             var spring = card.GetComponent<SpringScale>();
             if (spring != null) spring.SetTargetScale(isMine ? 1.06f : 1f);
             var meRing = card.transform.Find("MeRing")?.GetComponent<Image>();
@@ -462,8 +476,7 @@ namespace Dio.UI
                 if (isMine && local != null) meRing.color = DioStyle.Lighten(ColorPalette.Get(local.colorIndex), 0.45f);
             }
 
-            // Voter dots — one chip per player who voted for this level,
-            // colored with their color.
+            // Voter dots.
             var dots = card.transform.Find("Voters");
             if (dots != null)
             {
@@ -482,21 +495,20 @@ namespace Dio.UI
                 }
             }
 
-            // Click handler — only sends a vote; the host's vote IS the
-            // authoritative pick (server uses ResolveSelectedLevel at start).
+            int ownerConn = entry.ownerConnId;
+            string displayName = entry.displayName;
             var btn = card.GetComponent<Button>();
             if (btn != null)
             {
                 btn.onClick.RemoveAllListeners();
-                btn.onClick.AddListener(() => OnLevelCardClicked(idx));
+                btn.onClick.AddListener(() => OnLevelCardClicked(ownerConn, displayName));
             }
         }
 
-        void OnLevelCardClicked(int idx)
+        void OnLevelCardClicked(int ownerConnId, string displayName)
         {
-            LocalPrefs.PreferredLevelIndex = idx;
             var p = LocalPlayer;
-            if (p != null) p.CmdSetPreferredLevel(idx);
+            if (p != null) p.CmdSetPreferredLevel(ownerConnId, displayName);
         }
 
         void AddLobbyRow(DioPlayer p)
