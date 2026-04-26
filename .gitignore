@@ -130,3 +130,7 @@ kilo.jsonc
 # -----------------------------------------------------------------------------
 Assets/Dio/_Generated/
 Assets/Dio/_Generated.meta
+Assets/Dio/Levels/DefaultLevel.asset
+Assets/Dio/Resources/Globe.prefab
+Assets/Dio/Vehicles/DefaultKart.asset
+ProjectSettings/GraphicsSettings.asset
