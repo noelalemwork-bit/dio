@@ -260,6 +260,18 @@ namespace Dio.Player
             ApplyLocalImpact(velocityDelta, angularDelta);
         }
 
+        // Owner-directed screen flash. Server invokes this on the OWNER's
+        // connection when a shell / bomb / tornado lands on this car;
+        // RaceHUD listens for the static event and drives a brief, full-
+        // screen colour pulse. Belt-and-suspenders next to the SyncList of
+        // CarStateMachine — guaranteed immediate feedback even if the
+        // SyncList add slips through one tick early or late.
+        [TargetRpc]
+        public void TargetFlashScreen(NetworkConnectionToClient target, Dio.Powerups.PowerupKind kind, float duration)
+        {
+            Dio.UI.RaceHUD.OnLocalScreenFlash?.Invoke(kind, duration);
+        }
+
         void ApplyLocalImpact(Vector3 velocityDelta, Vector3 angularDelta)
         {
             if (_rb == null || _rb.isKinematic) return;

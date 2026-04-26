@@ -1,0 +1,43 @@
+%YAML 1.1
+%TAG !u! tag:unity3d.com,2011:
+--- !u!114 &11400000
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 0}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: 53db201af860a4243980de39e10133ba, type: 3}
+  m_Name: KenneyRace
+  m_EditorClassIdentifier: Assembly-CSharp::Dio.Player.VehicleProfile
+  displayName: Race
+  bodyMesh: {fileID: -8545447256379345787, guid: 169c2bc8fcd95f94c866ab3a903e748d, type: 3}
+  bodyScale: {x: 1.5, y: 1.5, z: 1.5}
+  bodyOffset: {x: 0, y: 0.4, z: 0}
+  bodyMaterial: {fileID: 2100000, guid: e174d7c62ba1e6e4e8fd0291f724d853, type: 2}
+  addBodyCollider: 1
+  includeCabin: 0
+  cabinMesh: {fileID: 0}
+  cabinScale: {x: 0, y: 0, z: 0}
+  cabinOffset: {x: 0, y: 0, z: 0}
+  cabinMaterial: {fileID: 0}
+  wheelMesh: {fileID: -4358753419632545560, guid: 470ef78152d40ab42abdf334383d6278, type: 3}
+  wheelMaterial: {fileID: 2100000, guid: e174d7c62ba1e6e4e8fd0291f724d853, type: 2}
+  wheelRadius: 0.36
+  wheelWidth: 0.28
+  wheelVisualScale: 2.2
+  frontLeftXZ: {x: -0.85, y: 0, z: 1.4}
+  frontRightXZ: {x: 0.85, y: 0, z: 1.4}
+  rearLeftXZ: {x: -0.85, y: 0, z: -1.4}
+  rearRightXZ: {x: 0.85, y: 0, z: -1.4}
+  mass: 700
+  linearDamping: 0.1
+  angularDamping: 0.4
+  suspensionDistance: 0.25
+  suspensionSpring: 38000
+  suspensionDamper: 5000
+  suspensionTargetPos: 0.5
+  forwardStiffness: 2.4
+  sidewaysStiffness: 1.8

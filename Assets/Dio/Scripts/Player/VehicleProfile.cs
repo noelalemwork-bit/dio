@@ -39,6 +39,8 @@ namespace Dio.Player
         public float wheelRadius = 0.4f;
         [Tooltip("Wheel width along the axle (X) in world units.")]
         public float wheelWidth = 0.2f;
+        [Tooltip("Multiplier on the visual wheel mesh size only. WheelCollider radius / suspension are unchanged, so the car still collides like a wheelRadius-sized wheel — useful when an FBX author intended chunkier-looking wheels than the physics radius implies.")]
+        public float wheelVisualScale = 1f;
 
         [Header("Wheel chassis-local positions (Y is computed from radius + suspension)")]
         public Vector3 frontLeftXZ  = new Vector3(-0.8f, 0f,  1.3f);

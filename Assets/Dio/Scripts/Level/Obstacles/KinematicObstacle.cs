@@ -120,36 +120,18 @@ namespace Dio.Level.Obstacles
             var mr = go.AddComponent<MeshRenderer>();
             mr.shadowCastingMode = UnityEngine.Rendering.ShadowCastingMode.Off;
             mr.receiveShadows = false;
-
-            // Vertex colors carry the brightness gradient; we want the shader
-            // to multiply them by a tint and respect transparency. The fallback
-            // chain is ordered by "renders reliably under URP" — `Dio/Tornado`
-            // has a URP forward pass now but if it's still importing or failed
-            // to compile, `Sprites/Default` is a built-in vertex-colored
-            // transparent shader URP renders fine. Final fallback is plain
-            // unlit which at least guarantees a visible silhouette (no alpha
-            // / vertex color, but you'll see the funnel).
-            Shader sh = Shader.Find("Dio/Tornado");
-            bool needsTint = true;
-            if (sh == null) sh = Shader.Find("Sprites/Default");
-            if (sh == null) sh = Shader.Find("Universal Render Pipeline/Unlit");
-            if (sh == null) { sh = Shader.Find("Unlit/Color"); needsTint = false; }
-
+            // Build runtime material instance — vertex colors carry the
+            // brightness gradient; the shader just multiplies by a tint.
+            // This is the exact path that worked in commit 5f9d565 — the
+            // earlier "robustness" pass that set _Surface/_Blend/_Cull
+            // forced URP/Unlit-specific properties that fought with the
+            // legacy CG SubShader, leaving the funnel invisible. Letting
+            // the shader own its own surface settings is what actually works.
+            Shader sh = Shader.Find("Dio/Tornado") ?? Shader.Find("Sprites/Default");
             if (sh != null)
             {
                 var mat = new Material(sh) { name = "TornadoRuntime" };
-                Color tint = new Color(0.85f, 0.92f, 1f, 0.55f);
-                if (needsTint && mat.HasProperty("_Tint")) mat.SetColor("_Tint", tint);
-                // Sprites/Default uses _Color as the per-renderer tint.
-                if (mat.HasProperty("_Color")) mat.SetColor("_Color", tint);
-                if (mat.HasProperty("_BaseColor")) mat.SetColor("_BaseColor", tint);
-                // Force the final transparent surface settings on URP/Unlit so it
-                // actually renders translucent — URP/Unlit defaults to opaque.
-                if (mat.HasProperty("_Surface")) mat.SetFloat("_Surface", 1f);   // 1 = Transparent
-                if (mat.HasProperty("_Blend"))   mat.SetFloat("_Blend", 0f);     // 0 = Alpha
-                if (mat.HasProperty("_Cull"))    mat.SetFloat("_Cull", 0f);      // double-sided
-                if (mat.HasProperty("_ZWrite"))  mat.SetFloat("_ZWrite", 0f);
-                mat.renderQueue = 3000; // Transparent queue
+                if (mat.HasProperty("_Tint")) mat.SetColor("_Tint", new Color(0.85f, 0.92f, 1f, 0.55f));
                 mr.material = mat;
             }
             _meshRoot = go.transform;
@@ -239,6 +221,8 @@ namespace Dio.Level.Obstacles
             RpcSpawnImpactBurst(car.transform.position, new Color(0.78f, 0.88f, 1f, 1f), 1.0f);
             ApplyClientImpact(car, transform.position, 7f, 0.9f, 9f);
             ApplyState(car, new TornadoTumbleState(), tumbleDuration);
+            if (car.connectionToClient != null)
+                car.TargetFlashScreen(car.connectionToClient, Dio.Powerups.PowerupKind.Tornado, tumbleDuration);
         }
     }
 }

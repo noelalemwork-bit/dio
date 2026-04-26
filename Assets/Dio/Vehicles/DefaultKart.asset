@@ -27,6 +27,7 @@ MonoBehaviour:
   wheelMaterial: {fileID: 0}
   wheelRadius: 0.4
   wheelWidth: 0.2
+  wheelVisualScale: 1
   frontLeftXZ: {x: -0.8, y: 0, z: 1.3}
   frontRightXZ: {x: 0.8, y: 0, z: 1.3}
   rearLeftXZ: {x: -0.8, y: 0, z: -1.3}

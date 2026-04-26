@@ -83,6 +83,33 @@ namespace Dio.UI
         float _bannerVisibleUntil;
         bool _holderHooked;
 
+        // Network-driven screen flash. Obstacles call DioCar.TargetFlashScreen
+        // on the affected owner; the local RaceHUD reads the active flash and
+        // tints `screenEffectOverlay` until the timer expires. This is the
+        // belt-and-suspenders complement to checking
+        // `_localStateMachine.IsActive(...)` — a TargetRpc fires immediately
+        // on the affected client, no SyncList latency, no risk that a brief
+        // state slips through unseen.
+        public static System.Action<PowerupKind, float> OnLocalScreenFlash;
+        PowerupKind _flashKind = PowerupKind.None;
+        float _flashUntil;
+
+        void OnEnable()
+        {
+            OnLocalScreenFlash += LocalFlashScreen;
+        }
+
+        void OnDestroy()
+        {
+            OnLocalScreenFlash -= LocalFlashScreen;
+        }
+
+        void LocalFlashScreen(PowerupKind kind, float duration)
+        {
+            _flashKind = kind;
+            _flashUntil = Time.unscaledTime + Mathf.Max(0.05f, duration);
+        }
+
         void Awake()
         {
             _iconMap = new Dictionary<PowerupKind, Sprite>();
@@ -276,6 +303,7 @@ namespace Dio.UI
             if (screenEffectOverlay == null) return;
 
             Color target = Color.clear;
+            // 1) State-machine driven tint (host-perspective, SyncList path).
             if (_localStateMachine != null)
             {
                 if (_localStateMachine.IsActive(PowerupKind.BlueShell))
@@ -289,10 +317,33 @@ namespace Dio.UI
                 else if (_localStateMachine.IsActive(PowerupKind.OilSlick))
                     target = new Color(0.06f, 0.07f, 0.10f, 0.20f);
             }
+            // 2) TargetRpc-driven flash (immediate, owner-direct). Wins over
+            //    the state-machine path so a flash fired the same tick the
+            //    state lands isn't squashed by lerp toward a dimmer state.
+            if (Time.unscaledTime < _flashUntil)
+            {
+                Color flash = ColorForFlashKind(_flashKind);
+                if (flash.a > target.a) target = flash;
+            }
 
             float t = 1f - Mathf.Exp(-screenEffectLerpSpeed * Time.unscaledDeltaTime);
             screenEffectOverlay.color = Color.Lerp(screenEffectOverlay.color, target, t);
             screenEffectOverlay.enabled = screenEffectOverlay.color.a > 0.01f;
+        }
+
+        static Color ColorForFlashKind(PowerupKind kind)
+        {
+            switch (kind)
+            {
+                case PowerupKind.BlueShell:  return new Color(0.08f, 0.32f, 0.95f, 0.85f);
+                case PowerupKind.GreenShell: return new Color(0.10f, 0.28f, 0.85f, 0.65f);
+                case PowerupKind.Lightning:  return new Color(0.78f, 0.90f, 1f,    0.30f);
+                case PowerupKind.Bobomb:     return new Color(1f,    0.38f, 0.18f, 0.55f);
+                case PowerupKind.OilSlick:   return new Color(0.06f, 0.07f, 0.10f, 0.40f);
+                case PowerupKind.Tornado:    return new Color(0.85f, 0.92f, 1f,    0.30f);
+                case PowerupKind.Banana:     return new Color(1f,    0.92f, 0.20f, 0.30f);
+                default:                     return Color.clear;
+            }
         }
 
         void FindLocalCar()
