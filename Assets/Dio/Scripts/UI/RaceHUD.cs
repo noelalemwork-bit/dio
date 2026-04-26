@@ -54,6 +54,11 @@ namespace Dio.UI
         public TMP_Text pingLabel;
         public float pingUpdateInterval = 0.5f;
 
+        [Header("Hit overlays")]
+        [Tooltip("Full-screen tint used for shell blindness, lightning freeze, and bomb/oil feedback.")]
+        public Image screenEffectOverlay;
+        public float screenEffectLerpSpeed = 8f;
+
         [Header("Pickup banner (shown briefly when a powerup is grabbed)")]
         public CanvasGroup pickupBannerGroup;
         public Image pickupBannerIcon;
@@ -65,6 +70,7 @@ namespace Dio.UI
         DioCar _localCar;
         PowerupHolder _localHolder;
         ArcadeCarController _localController;
+        Dio.Powerups.States.CarStateMachine _localStateMachine;
 
         PowerupKind _lastHeld = PowerupKind.None;
         int _lastCharges = -1;
@@ -88,6 +94,12 @@ namespace Dio.UI
             if (powerupSlotIcon != null) powerupSlotIcon.enabled = false;
             if (powerupTimerImage != null) powerupTimerImage.fillAmount = 0f;
             if (powerupChargeLabel != null) powerupChargeLabel.text = "";
+            if (screenEffectOverlay != null)
+            {
+                screenEffectOverlay.color = Color.clear;
+                screenEffectOverlay.enabled = false;
+                screenEffectOverlay.raycastTarget = false;
+            }
 
             if (pickupBannerGroup != null) pickupBannerGroup.alpha = 0f;
         }
@@ -109,6 +121,7 @@ namespace Dio.UI
             RefreshPositions();
             RefreshPickupBanner();
             RefreshPing();
+            RefreshScreenEffect();
         }
 
         // Live RTT readout for the local client. Hosts always show 0ms because
@@ -258,6 +271,30 @@ namespace Dio.UI
             }
         }
 
+        void RefreshScreenEffect()
+        {
+            if (screenEffectOverlay == null) return;
+
+            Color target = Color.clear;
+            if (_localStateMachine != null)
+            {
+                if (_localStateMachine.IsActive(PowerupKind.BlueShell))
+                    target = new Color(0.08f, 0.32f, 0.95f, 0.82f);
+                else if (_localStateMachine.IsActive(PowerupKind.GreenShell))
+                    target = new Color(0.10f, 0.28f, 0.85f, 0.62f);
+                else if (_localStateMachine.IsActive(PowerupKind.Lightning))
+                    target = new Color(0.78f, 0.90f, 1f, 0.26f);
+                else if (_localStateMachine.IsActive(PowerupKind.Bobomb))
+                    target = new Color(1f, 0.38f, 0.18f, 0.18f);
+                else if (_localStateMachine.IsActive(PowerupKind.OilSlick))
+                    target = new Color(0.06f, 0.07f, 0.10f, 0.20f);
+            }
+
+            float t = 1f - Mathf.Exp(-screenEffectLerpSpeed * Time.unscaledDeltaTime);
+            screenEffectOverlay.color = Color.Lerp(screenEffectOverlay.color, target, t);
+            screenEffectOverlay.enabled = screenEffectOverlay.color.a > 0.01f;
+        }
+
         void FindLocalCar()
         {
             foreach (var ni in NetworkClient.spawned.Values)
@@ -268,6 +305,7 @@ namespace Dio.UI
                 _localCar = car;
                 _localHolder = car.GetComponent<PowerupHolder>();
                 _localController = car.GetComponent<ArcadeCarController>();
+                _localStateMachine = car.GetComponent<Dio.Powerups.States.CarStateMachine>();
                 if (_localHolder != null && !_holderHooked)
                 {
                     _localHolder.OnHeldChangedClient += OnLocalHeldChanged;

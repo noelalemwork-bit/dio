@@ -64,6 +64,12 @@ namespace Dio.Level.Obstacles
             NetworkServer.Destroy(gameObject);
         }
 
+        [ClientRpc]
+        protected void RpcSpawnImpactBurst(Vector3 position, Color color, float scale)
+        {
+            Dio.Powerups.Effects.ImpactBurst.Spawn(position, color, scale);
+        }
+
         /// Convenience: apply a state to a car for a duration.
         [Server]
         protected static void ApplyState(DioCar car, CarState state, float duration)
@@ -71,8 +77,36 @@ namespace Dio.Level.Obstacles
             if (car == null) return;
             var sm = car.GetComponent<CarStateMachine>();
             if (sm == null) return;
+            sm.Clear(state.Kind);
             state.Duration = duration;
             sm.Apply(state);
+        }
+
+        [Server]
+        protected static void ApplyClientImpact(DioCar car, Vector3 origin, float tangentialForce, float upwardForce, float angularForce)
+        {
+            if (car == null || car.connectionToClient == null) return;
+
+            Vector3 planetCenter = Vector3.zero;
+            var planet = Dio.Level.RaceBootstrap.CurrentPlanet;
+            if (planet != null) planetCenter = planet.transform.position;
+
+            Vector3 up = (car.transform.position - planetCenter).normalized;
+            if (up.sqrMagnitude < 0.0001f) up = car.transform.up;
+
+            Vector3 away = Vector3.ProjectOnPlane(car.transform.position - origin, up);
+            if (away.sqrMagnitude < 0.0001f)
+                away = Vector3.ProjectOnPlane(-car.transform.forward, up);
+            if (away.sqrMagnitude < 0.0001f)
+                away = car.transform.forward;
+            away.Normalize();
+
+            Vector3 velocityDelta = away * tangentialForce + up * upwardForce;
+            Vector3 angularAxis = Vector3.Cross(up, away).normalized;
+            if (angularAxis.sqrMagnitude < 0.0001f) angularAxis = car.transform.right;
+            Vector3 angularDelta = angularAxis * angularForce;
+
+            car.TargetApplyImpact(car.connectionToClient, velocityDelta, angularDelta);
         }
     }
 }

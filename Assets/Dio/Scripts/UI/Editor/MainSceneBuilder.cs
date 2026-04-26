@@ -620,6 +620,15 @@ namespace Dio.UI.EditorTools
             var hudRootImg = hudRoot.GetComponent<Image>(); if (hudRootImg != null) hudRootImg.raycastTarget = false;
             hudRoot.SetActive(false);
 
+            var overlayGo = new GameObject("ScreenEffectOverlay", typeof(RectTransform), typeof(Image));
+            overlayGo.transform.SetParent(hudRoot.transform, false);
+            var overlayRt = (RectTransform)overlayGo.transform;
+            overlayRt.anchorMin = Vector2.zero; overlayRt.anchorMax = Vector2.one;
+            overlayRt.offsetMin = Vector2.zero; overlayRt.offsetMax = Vector2.zero;
+            var overlayImg = overlayGo.GetComponent<Image>();
+            overlayImg.color = Color.clear;
+            overlayImg.raycastTarget = false;
+
             // Minimap (top-left). The structure:
             //   MinimapHolder (positioning)
             //     CircleMask (Image + Mask, circle sprite — clips children to a disc)
@@ -991,6 +1000,7 @@ namespace Dio.UI.EditorTools
             hudCtrl.speedNeedle = needleRt;
             hudCtrl.positionLabel = posList;
             hudCtrl.pingLabel = pingText;
+            hudCtrl.screenEffectOverlay = overlayImg;
             hudCtrl.pickupBannerGroup = bannerCg;
             hudCtrl.pickupBannerIcon = bannerIcon;
             hudCtrl.pickupBannerLabel = bannerLabel;

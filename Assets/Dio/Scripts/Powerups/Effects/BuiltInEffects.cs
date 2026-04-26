@@ -47,7 +47,7 @@ namespace Dio.Powerups.Effects
     public class LightningEffect : PowerupEffect
     {
         public override PowerupKind Kind => PowerupKind.Lightning;
-        public float Duration = 4f;
+        public float Duration = 5f;
 
         public override void Activate(DioCar caster)
         {
@@ -61,7 +61,7 @@ namespace Dio.Powerups.Effects
                 var sm = car.GetComponent<CarStateMachine>();
                 if (sm != null && !sm.IsInvincible)
                 {
-                    sm.Apply(new ShrunkState { Duration = Duration });
+                    sm.Apply(new LightningFreezeState { Duration = Duration });
                     targets.Add(car.transform.position);
                 }
             }

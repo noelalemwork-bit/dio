@@ -254,6 +254,19 @@ namespace Dio.Player
             _car.readLocalInput = false;
         }
 
+        [TargetRpc]
+        public void TargetApplyImpact(NetworkConnectionToClient target, Vector3 velocityDelta, Vector3 angularDelta)
+        {
+            ApplyLocalImpact(velocityDelta, angularDelta);
+        }
+
+        void ApplyLocalImpact(Vector3 velocityDelta, Vector3 angularDelta)
+        {
+            if (_rb == null || _rb.isKinematic) return;
+            _rb.linearVelocity += velocityDelta;
+            _rb.angularVelocity += angularDelta;
+        }
+
         // ---- Color sync ----
 
         void OnColorChanged(int oldIdx, int newIdx) => ApplyColor(newIdx);

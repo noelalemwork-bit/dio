@@ -3,10 +3,8 @@ using Dio.Player;
 
 namespace Dio.Powerups.States
 {
-    /// Builds a "client copy" CarState from a synced PowerupKind so the owner
-    /// can apply ModifyInputs / ModifyController locally. The server is still
-    /// authoritative on durations / expiry; the owner just mirrors the active
-    /// kinds and applies the SAME modification each FixedUpdate.
+    /// Builds a client-side copy of the state that matches the synced
+    /// PowerupKind on the car.
     public static class CarStateFactory
     {
         public static CarState Create(PowerupKind kind)
@@ -16,23 +14,32 @@ namespace Dio.Powerups.States
                 case PowerupKind.Boost:       return new SpeedBoostState();
                 case PowerupKind.TripleBoost: return new SpeedBoostState();
                 case PowerupKind.Star:        return new StarState();
-                case PowerupKind.Lightning:   return new ShrunkState();
-                // Multiple kinds map to the same CarState type with different
-                // parameters. The SyncList stores the original PowerupKind so
-                // visuals are distinct; the factory creates the right variant.
-                case PowerupKind.Banana:      return new SlipperyState { Mode = SlipperyState.SlipMode.RandomSteer };
-                case PowerupKind.OilSlick:    return new SlipperyState { Mode = SlipperyState.SlipMode.ZeroSteer };
-                case PowerupKind.GreenShell:
-                case PowerupKind.BlueShell:
-                case PowerupKind.Bobomb:
-                case PowerupKind.Tornado:     return new TumbleState();
+                case PowerupKind.Lightning:   return new LightningFreezeState();
+                case PowerupKind.Banana:      return new BananaSlipState();
+                case PowerupKind.OilSlick:    return new OilSpinState();
+                case PowerupKind.GreenShell:  return new GreenShellBlindState();
+                case PowerupKind.BlueShell:   return new BlueShellBlindState();
+                case PowerupKind.Bobomb:      return new BobombBlastState();
+                case PowerupKind.Tornado:     return new TornadoTumbleState();
                 case PowerupKind.FreezeRay:   return new FrozenState();
                 default: return null;
             }
         }
     }
 
-    /// Linear forward speed boost. Bumps max speed and peak torque for a short duration.
+    static class StatePhysicsKick
+    {
+        public static void Apply(DioCar car, Vector3 velocityDelta, Vector3 angularDelta)
+        {
+            if (car == null) return;
+            var rb = car.GetComponent<Rigidbody>();
+            if (rb == null || rb.isKinematic || !car.isOwned) return;
+
+            rb.linearVelocity += velocityDelta;
+            rb.angularVelocity += angularDelta;
+        }
+    }
+
     public class SpeedBoostState : CarState
     {
         public override PowerupKind Kind => PowerupKind.Boost;
@@ -46,7 +53,6 @@ namespace Dio.Powerups.States
         }
     }
 
-    /// Star: invincibility (flagged for collision filtering) + a milder speed bump.
     public class StarState : CarState
     {
         public override PowerupKind Kind => PowerupKind.Star;
@@ -58,59 +64,116 @@ namespace Dio.Powerups.States
         }
     }
 
-    /// Lightning'd: shrunk + slower acceleration. Visual scale handled by CarStateMachine.
-    public class ShrunkState : CarState
+    public class LightningFreezeState : CarState
     {
         public override PowerupKind Kind => PowerupKind.Lightning;
 
+        public override void ModifyInputs(ref ArcadeCarController.Inputs inputs)
+        {
+            inputs.steerThrottle = Vector2.zero;
+            inputs.brake = true;
+            inputs.handbrake = false;
+        }
+
         public override void ModifyController(ArcadeCarController c)
         {
-            c.maxSpeed *= 0.6f;
-            c.peakMotorTorque *= 0.5f;
+            c.maxSpeed *= 0.08f;
+            c.peakMotorTorque = 0f;
         }
     }
 
-    /// Slippery: zero out the steering input so the car drifts straight (or
-    /// inverts steering for chaos — set Mode). Used by banana / oil slick.
-    public class SlipperyState : CarState
+    public class BananaSlipState : CarState
     {
-        public override PowerupKind Kind => PowerupKind.OilSlick; // reused for banana too
-        public enum SlipMode { ZeroSteer, InvertSteer, RandomSteer }
-        public SlipMode Mode = SlipMode.ZeroSteer;
+        public override PowerupKind Kind => PowerupKind.Banana;
 
         float _seed;
-        public override void OnEnter() { _seed = Random.value * 100f; }
+
+        public override void OnEnter()
+        {
+            _seed = Random.value * 100f;
+            if (Car == null) return;
+
+            float side = Random.value < 0.5f ? -1f : 1f;
+            Vector3 tangent = Vector3.ProjectOnPlane(Car.transform.right * side, Car.transform.up).normalized;
+            Vector3 velocity = tangent * 5.5f;
+            Vector3 angular = Car.transform.up * (8f * side);
+            StatePhysicsKick.Apply(Car, velocity, angular);
+        }
 
         public override void ModifyInputs(ref ArcadeCarController.Inputs inputs)
         {
-            switch (Mode)
-            {
-                case SlipMode.ZeroSteer: inputs.steerThrottle.x = 0f; break;
-                case SlipMode.InvertSteer: inputs.steerThrottle.x = -inputs.steerThrottle.x; break;
-                case SlipMode.RandomSteer:
-                    inputs.steerThrottle.x = Mathf.Sin((Time.time + _seed) * 8f);
-                    break;
-            }
+            inputs.steerThrottle.x = Mathf.Sin((Time.time + _seed) * 9f);
+            inputs.steerThrottle.y *= 0.35f;
+            inputs.brake = false;
+            inputs.handbrake = true;
         }
     }
 
-    /// Tumble: zero throttle + zero steer for a moment after a hard hit.
-    /// (Used by shells, bombs, tornado, blue-shell-AOE.)
-    public class TumbleState : CarState
+    public class OilSpinState : CarState
     {
-        public override PowerupKind Kind => PowerupKind.GreenShell; // reused
+        public override PowerupKind Kind => PowerupKind.OilSlick;
+
+        float _seed;
+
+        public override void OnEnter()
+        {
+            _seed = Random.value * 100f;
+            if (Car == null) return;
+
+            float side = Random.value < 0.5f ? -1f : 1f;
+            Vector3 tangent = Vector3.ProjectOnPlane(Car.transform.right * side, Car.transform.up).normalized;
+            Vector3 velocity = tangent * 3.5f;
+            Vector3 angular = Car.transform.up * (13f * side);
+            StatePhysicsKick.Apply(Car, velocity, angular);
+        }
+
+        public override void ModifyInputs(ref ArcadeCarController.Inputs inputs)
+        {
+            inputs.steerThrottle.x = Mathf.Sin((Time.time + _seed) * 12f);
+            inputs.steerThrottle.y *= 0.15f;
+            inputs.brake = false;
+            inputs.handbrake = true;
+        }
+    }
+
+    public class GreenShellBlindState : CarState
+    {
+        public override PowerupKind Kind => PowerupKind.GreenShell;
+    }
+
+    public class BlueShellBlindState : CarState
+    {
+        public override PowerupKind Kind => PowerupKind.BlueShell;
+    }
+
+    public class BobombBlastState : CarState
+    {
+        public override PowerupKind Kind => PowerupKind.Bobomb;
+
+        public override void ModifyInputs(ref ArcadeCarController.Inputs inputs)
+        {
+            inputs.steerThrottle = Vector2.zero;
+            inputs.brake = true;
+            inputs.handbrake = true;
+        }
+    }
+
+    public class TornadoTumbleState : CarState
+    {
+        public override PowerupKind Kind => PowerupKind.Tornado;
+
         public override void ModifyInputs(ref ArcadeCarController.Inputs inputs)
         {
             inputs.steerThrottle = Vector2.zero;
             inputs.brake = false;
-            inputs.handbrake = false;
+            inputs.handbrake = true;
         }
     }
 
-    /// Frozen: total input lockdown. Stub for the FreezeRay powerup.
     public class FrozenState : CarState
     {
         public override PowerupKind Kind => PowerupKind.FreezeRay;
+
         public override void ModifyInputs(ref ArcadeCarController.Inputs inputs)
         {
             inputs.steerThrottle = Vector2.zero;

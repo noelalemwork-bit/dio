@@ -72,6 +72,7 @@ namespace Dio.Powerups.States
         public override void OnStopClient()
         {
             _activeKinds.OnChange -= OnKindsChanged;
+            for (int i = 0; i < _clientStates.Count; i++) _clientStates[i].OnExit();
             _clientStates.Clear();
         }
 
@@ -152,25 +153,43 @@ namespace Dio.Powerups.States
 
         void RebuildClientStates()
         {
-            // Cheap rebuild — at most ~3 active states per car. Avoids the
-            // headache of incremental add/remove tracking against SyncList ops.
-            _clientStates.Clear();
+            var next = new List<CarState>(_activeKinds.Count);
             foreach (var k in _activeKinds)
             {
-                var s = CarStateFactory.Create((PowerupKind)k);
-                if (s != null) { s.Car = _car; _clientStates.Add(s); }
+                var kind = (PowerupKind)k;
+                CarState existing = null;
+                for (int i = 0; i < _clientStates.Count; i++)
+                {
+                    if (_clientStates[i].Kind != kind) continue;
+                    existing = _clientStates[i];
+                    _clientStates.RemoveAt(i);
+                    break;
+                }
+
+                if (existing == null)
+                {
+                    existing = CarStateFactory.Create(kind);
+                    if (existing != null)
+                    {
+                        existing.Car = _car;
+                        if (!isServer) existing.OnEnter();
+                    }
+                }
+
+                if (existing != null)
+                    next.Add(existing);
             }
+
+            for (int i = 0; i < _clientStates.Count; i++)
+                if (!isServer) _clientStates[i].OnExit();
+
+            _clientStates.Clear();
+            _clientStates.AddRange(next);
         }
 
         void ApplyVisualState()
         {
-            bool shrunk = false;
-            foreach (var k in _activeKinds)
-            {
-                if (k == (int)PowerupKind.Lightning) shrunk = true;
-                // Add more visual hooks here (e.g. star glow particles).
-            }
-            transform.localScale = shrunk ? _baseScale * 0.55f : _baseScale;
+            transform.localScale = _baseScale;
         }
     }
 }
