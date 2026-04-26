@@ -43,34 +43,79 @@ namespace Dio.Level
     /// resolved height — so cars on the back row stand at the same height
     /// as the polesitter and the front of the live track is invisibly seamed
     /// to the back of the pad.
+    /// Reusable buffer pool for procedural mesh generation. Hand it to
+    /// `Build` / `BuildGuards` / `BuildSpawnPad` to avoid the per-rebuild GC
+    /// hit of allocating fresh `List<Vector3>` and `List<int>` every call —
+    /// the editor in particular rebuilds the preview track on every drag
+    /// tick, where the lists' capacity stabilises after the first build.
+    /// Calling code clears the lists at the start of each build (cheap) and
+    /// re-populates in place. Pass `null` if you don't care about churn.
+    public class TrackBuilderScratch
+    {
+        public readonly System.Collections.Generic.List<Vector3> verts   = new System.Collections.Generic.List<Vector3>();
+        public readonly System.Collections.Generic.List<Vector3> normals = new System.Collections.Generic.List<Vector3>();
+        public readonly System.Collections.Generic.List<Vector2> uvs     = new System.Collections.Generic.List<Vector2>();
+        public readonly System.Collections.Generic.List<int>     tris    = new System.Collections.Generic.List<int>();
+
+        public readonly System.Collections.Generic.List<Vector3> guardL  = new System.Collections.Generic.List<Vector3>();
+        public readonly System.Collections.Generic.List<int>     guardLT = new System.Collections.Generic.List<int>();
+        public readonly System.Collections.Generic.List<Vector3> guardR  = new System.Collections.Generic.List<Vector3>();
+        public readonly System.Collections.Generic.List<int>     guardRT = new System.Collections.Generic.List<int>();
+
+        public void ClearRibbon()
+        {
+            verts.Clear(); normals.Clear(); uvs.Clear(); tris.Clear();
+        }
+        public void ClearGuards()
+        {
+            guardL.Clear(); guardLT.Clear(); guardR.Clear(); guardRT.Clear();
+        }
+    }
+
     public static class TrackBuilder
     {
-        const int SegmentsPerArc = 64;
+        public const int DefaultSegmentsPerArc = 64;
+        public const int EditorPreviewSegmentsPerArc = 16;
         const float DerivEpsilon = 0.001f;
 
-        // Robust finite-difference bezier tangent. At t == 1 we'd otherwise
-        // sample bezier(1+epsilon) which clamps back to bezier(1) and gives a
-        // zero tangent — which used to fall through to the great-circle
-        // tangent (= straight line A→B), wrong for any curved bezier. Now we
-        // step BACKWARD at t==1 so the local tangent always reflects the
-        // true bezier derivative.
+        // Bezier tangent. At the endpoints (t=0 / t=1) we use the ANALYTIC
+        // direction toward the corresponding handle — `a → ah` at t=0 and
+        // `bh → b` at t=1. This is shared between every edge that meets at
+        // the same anchor (since `a` / `ah` / `bh` / `b` derive from the
+        // anchor's shared in/outHandle), so two edges touching at an anchor
+        // produce identical lateral frames — no rail tapering at the joint.
+        // Interior samples still use forward finite difference for smoothness
+        // through curved sections.
         static Vector3 BezierTangent(Vector3 a, Vector3 ah, Vector3 bh, Vector3 b, float t)
         {
+            // Analytic endpoint tangents — same value for every edge sharing
+            // the anchor's handle directions, so adjacent edges' rails align.
+            if (t <= DerivEpsilon)
+            {
+                Vector3 tan = GeodesicUtil.TangentAt(a, ah);
+                if (tan.sqrMagnitude > 1e-6f) return tan;
+            }
+            if (t >= 1f - DerivEpsilon)
+            {
+                Vector3 tan = GeodesicUtil.TangentAt(bh, b);
+                if (tan.sqrMagnitude > 1e-6f) return tan;
+            }
+            // Interior — forward finite difference, with a backward fallback
+            // for samples that ended up too close to t=1 to step forward.
             Vector3 dir, dirAhead;
             if (t < 1f - DerivEpsilon)
             {
                 dir      = GeodesicUtil.SphericalBezier(a, ah, bh, b, t);
                 dirAhead = GeodesicUtil.SphericalBezier(a, ah, bh, b, t + DerivEpsilon);
-                Vector3 tan = (dirAhead - dir).normalized;
-                if (tan.sqrMagnitude > 1e-6f) return tan;
+                Vector3 fd = (dirAhead - dir).normalized;
+                if (fd.sqrMagnitude > 1e-6f) return fd;
             }
             else
             {
-                // Backward finite difference at the right endpoint.
                 dir      = GeodesicUtil.SphericalBezier(a, ah, bh, b, 1f - DerivEpsilon);
                 dirAhead = GeodesicUtil.SphericalBezier(a, ah, bh, b, 1f);
-                Vector3 tan = (dirAhead - dir).normalized;
-                if (tan.sqrMagnitude > 1e-6f) return tan;
+                Vector3 fd = (dirAhead - dir).normalized;
+                if (fd.sqrMagnitude > 1e-6f) return fd;
             }
             return GeodesicUtil.TangentAt(a, b);
         }
@@ -135,18 +180,37 @@ namespace Dio.Level
         /// Build the full track ribbon. Pass a `raycaster` to make every
         /// sample hug the Globe surface; pass null to fall back to the
         /// level's nominal sphere (fine for off-screen render targets that
-        /// don't need surface accuracy).
-        public static Mesh Build(LevelData level, GlobeRaycaster raycaster = null, float surfaceLift = DefaultSurfaceLift)
+        /// don't need surface accuracy). `segmentsPerArc` lets the editor
+        /// preview run at quarter resolution while the runtime stays at
+        /// full quality. `scratch` opt-in reuses the buffer lists between
+        /// rebuilds — the editor's drag loop benefits hugely.
+        public static Mesh Build(LevelData level, GlobeRaycaster raycaster = null,
+            float surfaceLift = DefaultSurfaceLift,
+            int segmentsPerArc = DefaultSegmentsPerArc,
+            TrackBuilderScratch scratch = null)
         {
             if (level == null || !level.HasMinimum) return null;
             level.EnsureLinearChainNext();
+            if (segmentsPerArc < 4) segmentsPerArc = 4;
 
             float halfW = level.EffectiveTrackWidth * 0.5f;
 
-            var verts   = new List<Vector3>();
-            var normals = new List<Vector3>();
-            var uvs     = new List<Vector2>();
-            var tris    = new List<int>();
+            List<Vector3> verts;
+            List<Vector3> normals;
+            List<Vector2> uvs;
+            List<int>     tris;
+            if (scratch != null)
+            {
+                scratch.ClearRibbon();
+                verts = scratch.verts; normals = scratch.normals; uvs = scratch.uvs; tris = scratch.tris;
+            }
+            else
+            {
+                verts   = new List<Vector3>();
+                normals = new List<Vector3>();
+                uvs     = new List<Vector2>();
+                tris    = new List<int>();
+            }
 
             // L/R vertex indices cached per anchor so adjacent edges sharing
             // a node reuse exact same boundary verts. The lateral frame at
@@ -186,12 +250,15 @@ namespace Dio.Level
                 int prevLeft  = -1;
                 int prevRight = -1;
                 Vector3 prevWorldCenter = Vector3.zero;
+                Vector3 prevDir = Vector3.zero;
+                Vector3 prevTan = Vector3.zero;
+                bool   havePrevSample = false;
 
-                for (int s = 0; s <= SegmentsPerArc; s++)
+                for (int s = 0; s <= segmentsPerArc; s++)
                 {
-                    float t = (float)s / SegmentsPerArc;
+                    float t = (float)s / segmentsPerArc;
                     bool atStart = s == 0;
-                    bool atEnd   = s == SegmentsPerArc;
+                    bool atEnd   = s == segmentsPerArc;
                     int anchorAt = atStart ? i : (atEnd ? j : -1);
 
                     int left, right;
@@ -202,11 +269,33 @@ namespace Dio.Level
                         left = cached.left;
                         right = cached.right;
                         worldCenter = (verts[left] + verts[right]) * 0.5f;
+                        prevDir = worldCenter.normalized;
+                        prevTan = BezierTangent(a, ah, bh, b, t);
+                        havePrevSample = true;
                     }
                     else
                     {
                         Vector3 dir = GeodesicUtil.SphericalBezier(a, ah, bh, b, t);
                         Vector3 tangent = BezierTangent(a, ah, bh, b, t);
+
+                        // Fold-back guard: on extremely tight turns the
+                        // bezier can briefly reverse along the previous
+                        // tangent, producing extruded edges that loop back
+                        // on themselves. Detect via dot(newDir-prevDir,
+                        // prevTan) — if negative, the new sample is "behind"
+                        // the previous one. Snap its angular position to
+                        // the previous sample (so the cross-section stops
+                        // moving) but keep the new lerped Y for smoothness.
+                        if (havePrevSample)
+                        {
+                            Vector3 delta = dir - prevDir;
+                            if (Vector3.Dot(delta, prevTan) < 0f)
+                            {
+                                dir = prevDir;
+                                tangent = prevTan;
+                            }
+                        }
+
                         Vector3 normal = dir;
                         Vector3 width  = Vector3.Cross(tangent, normal).normalized;
 
@@ -219,6 +308,9 @@ namespace Dio.Level
                         right = verts.Count;     verts.Add(vR); normals.Add(normal); uvs.Add(default);
 
                         if (anchorAt >= 0) anchorVerts[anchorAt] = (left, right);
+                        prevDir = dir;
+                        prevTan = tangent;
+                        havePrevSample = true;
                     }
 
                     if (s > 0)
@@ -264,16 +356,33 @@ namespace Dio.Level
         /// than a track width — Pass 2 of the refactor adds a binary search
         /// to find the divergence-t and skip emission up to that point.
         /// For linear chains this is a no-op.
-        public static (Mesh left, Mesh right) BuildGuards(LevelData level, GlobeRaycaster raycaster = null, GuardOptions? options = null)
+        public static (Mesh left, Mesh right) BuildGuards(LevelData level, GlobeRaycaster raycaster = null,
+            GuardOptions? options = null,
+            int segmentsPerArc = DefaultSegmentsPerArc,
+            TrackBuilderScratch scratch = null)
         {
             if (level == null || !level.HasMinimum) return (null, null);
             level.EnsureLinearChainNext();
+            if (segmentsPerArc < 4) segmentsPerArc = 4;
             var opt = options ?? GuardOptions.Default;
 
-            var leftVerts  = new List<Vector3>();
-            var leftTris   = new List<int>();
-            var rightVerts = new List<Vector3>();
-            var rightTris  = new List<int>();
+            List<Vector3> leftVerts;
+            List<int>     leftTris;
+            List<Vector3> rightVerts;
+            List<int>     rightTris;
+            if (scratch != null)
+            {
+                scratch.ClearGuards();
+                leftVerts = scratch.guardL; leftTris = scratch.guardLT;
+                rightVerts = scratch.guardR; rightTris = scratch.guardRT;
+            }
+            else
+            {
+                leftVerts  = new List<Vector3>();
+                leftTris   = new List<int>();
+                rightVerts = new List<Vector3>();
+                rightTris  = new List<int>();
+            }
 
             // Skip ranges per (from, to) edge: how many initial / trailing
             // samples to drop on the LEFT or RIGHT guard. Populated below for
@@ -283,7 +392,7 @@ namespace Dio.Level
             var skipStartR = new Dictionary<(int, int), int>();
             var skipEndL   = new Dictionary<(int, int), int>();
             var skipEndR   = new Dictionary<(int, int), int>();
-            ComputeForkJoinSkips(level, raycaster, skipStartL, skipStartR, skipEndL, skipEndR);
+            ComputeForkJoinSkips(level, raycaster, skipStartL, skipStartR, skipEndL, skipEndR, segmentsPerArc);
 
             foreach (var (i, j) in level.EnumerateEdges())
             {
@@ -293,9 +402,9 @@ namespace Dio.Level
                 int rightEnd   = skipEndR  .TryGetValue((i, j), out int v4) ? v4 : 0;
 
                 EmitGuardStrip(level, raycaster, opt, i, j, signOfWidth: +1f,
-                    leftStart, SegmentsPerArc - leftEnd, leftVerts, leftTris);
+                    leftStart, segmentsPerArc - leftEnd, segmentsPerArc, leftVerts, leftTris);
                 EmitGuardStrip(level, raycaster, opt, i, j, signOfWidth: -1f,
-                    rightStart, SegmentsPerArc - rightEnd, rightVerts, rightTris);
+                    rightStart, segmentsPerArc - rightEnd, segmentsPerArc, rightVerts, rightTris);
             }
 
             // Endcap walls at chain endpoints. Independent flags so callers
@@ -337,7 +446,7 @@ namespace Dio.Level
         // surface raycast (so the rail still hugs uneven terrain DOWNWARD
         // even when the ribbon's top is flat).
         static void EmitGuardStrip(LevelData level, GlobeRaycaster raycaster, in GuardOptions opt,
-            int from, int to, float signOfWidth, int sStart, int sEnd,
+            int from, int to, float signOfWidth, int sStart, int sEnd, int segmentsPerArc,
             List<Vector3> verts, List<int> tris)
         {
             if (sStart > sEnd) return;
@@ -350,11 +459,36 @@ namespace Dio.Level
             float endTop   = endSurfaceR   + level.points[to].yOffset;
 
             int local = 0;
+            // Endpoint tangents come from BezierTangent's analytic branch
+            // (anchor → outHandle at t=0, inHandle → anchor at t=1) so two
+            // adjacent edges meeting at the same anchor produce identical
+            // lateral frames at the joint. No more rail tapering at the
+            // start/end of the strip — both ends use the bezier's true
+            // direction, not a per-sample finite-difference approximation
+            // that varies between adjacent edges.
+            Vector3 prevDir = Vector3.zero;
+            Vector3 prevTan = Vector3.zero;
+            bool havePrev = false;
             for (int s = sStart; s <= sEnd; s++)
             {
-                float t = (float)s / SegmentsPerArc;
+                float t = (float)s / segmentsPerArc;
                 Vector3 dir = GeodesicUtil.SphericalBezier(a, ah, bh, b, t);
                 Vector3 tangent = BezierTangent(a, ah, bh, b, t);
+
+                // Fold-back guard — same logic as Build(). Tight bezier
+                // bends can step backward along the previous tangent, which
+                // creates inverted rail cross-sections. Snap to the previous
+                // sample when that happens.
+                if (havePrev)
+                {
+                    Vector3 delta = dir - prevDir;
+                    if (Vector3.Dot(delta, prevTan) < 0f)
+                    {
+                        dir = prevDir;
+                        tangent = prevTan;
+                    }
+                }
+
                 Vector3 width = Vector3.Cross(tangent, dir).normalized;
                 Vector3 sideOutward = signOfWidth > 0 ? width : -width;
 
@@ -367,6 +501,9 @@ namespace Dio.Level
                 Vector3 anchor = dir * topRadial + sideOutward * (halfW + opt.outwardOffset);
                 int inwardSign = signOfWidth > 0 ? -1 : +1;
                 AppendCross(verts, tris, anchor, dir, surfaceR, sideOutward, opt, local, inwardSign);
+                prevDir = dir;
+                prevTan = tangent;
+                havePrev = true;
                 local++;
             }
         }
@@ -387,7 +524,8 @@ namespace Dio.Level
         // rail are never affected — they remain the outer envelope of the fork.
         static void ComputeForkJoinSkips(LevelData level, GlobeRaycaster raycaster,
             Dictionary<(int, int), int> skipStartL, Dictionary<(int, int), int> skipStartR,
-            Dictionary<(int, int), int> skipEndL,   Dictionary<(int, int), int> skipEndR)
+            Dictionary<(int, int), int> skipEndL,   Dictionary<(int, int), int> skipEndR,
+            int segmentsPerArc)
         {
             float threshold = level.EffectiveTrackWidth;
 
@@ -401,7 +539,7 @@ namespace Dio.Level
                 {
                     int jL = sorted[k];     // leftward branch
                     int jR = sorted[k + 1]; // rightward
-                    int sk = FindFanOutSampleIndex(level, raycaster, i, jL, jR, atStart: true, threshold);
+                    int sk = FindFanOutSampleIndex(level, raycaster, i, jL, jR, atStart: true, threshold, segmentsPerArc);
                     skipStartR[(i, jL)] = sk;
                     skipStartL[(i, jR)] = sk;
                 }
@@ -430,7 +568,7 @@ namespace Dio.Level
                 {
                     int iL = sorted[k];
                     int iR = sorted[k + 1];
-                    int sk = FindFanOutSampleIndex(level, raycaster, j, iL, iR, atStart: false, threshold);
+                    int sk = FindFanOutSampleIndex(level, raycaster, j, iL, iR, atStart: false, threshold, segmentsPerArc);
                     skipEndR[(iL, j)] = sk;
                     skipEndL[(iR, j)] = sk;
                 }
@@ -481,7 +619,7 @@ namespace Dio.Level
         // adjacent edges and find the first sample where their inner rails
         // (eA's right vs eB's left) are at least `threshold` apart.
         static int FindFanOutSampleIndex(LevelData level, GlobeRaycaster raycaster,
-            int anchor, int otherL, int otherR, bool atStart, float threshold)
+            int anchor, int otherL, int otherR, bool atStart, float threshold, int segmentsPerArc)
         {
             int fromL = atStart ? anchor : otherL;
             int toL   = atStart ? otherL : anchor;
@@ -490,9 +628,9 @@ namespace Dio.Level
             level.GetEdge(fromL, toL, out Vector3 aL, out Vector3 ahL, out Vector3 bhL, out Vector3 bL);
             level.GetEdge(fromR, toR, out Vector3 aR, out Vector3 ahR, out Vector3 bhR, out Vector3 bR);
             float halfW = level.EffectiveTrackWidth * 0.5f;
-            for (int s = 0; s <= SegmentsPerArc; s++)
+            for (int s = 0; s <= segmentsPerArc; s++)
             {
-                float t = atStart ? (float)s / SegmentsPerArc : 1f - (float)s / SegmentsPerArc;
+                float t = atStart ? (float)s / segmentsPerArc : 1f - (float)s / segmentsPerArc;
                 Vector3 dirL = GeodesicUtil.SphericalBezier(aL, ahL, bhL, bL, t);
                 Vector3 dirAheadL = GeodesicUtil.SphericalBezier(aL, ahL, bhL, bL, Mathf.Clamp01(t + DerivEpsilon));
                 Vector3 tanL = (dirAheadL - dirL).normalized;
@@ -512,7 +650,7 @@ namespace Dio.Level
                 if (Vector3.Distance(ptLR, ptRL) >= threshold)
                     return s;
             }
-            return SegmentsPerArc;
+            return segmentsPerArc;
         }
 
         // Emit one cross-section sample (skirt → wall → lip, or just skirt

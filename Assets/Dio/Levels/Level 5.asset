@@ -1,0 +1,37 @@
+%YAML 1.1
+%TAG !u! tag:unity3d.com,2011:
+--- !u!114 &11400000
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 0}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: 1bc9a7716bc36b04f93b3d69603db1de, type: 3}
+  m_Name: Level 5
+  m_EditorClassIdentifier: Assembly-CSharp::Dio.Level.LevelData
+  displayName: 1 game
+  circumference: 1256.6371
+  trackRatio: 1
+  trackWidth: 15
+  points:
+  - directionFromCenter: {x: 0.96302706, y: -0.07666535, z: 0.25826585}
+    bank: 0
+    inHandle: {x: 0, y: 0, z: 0}
+    outHandle: {x: 0.9643337, y: 0.060362384, z: -0.25771463}
+    yOffset: 12.003877
+    next: 01000000
+  - directionFromCenter: {x: -0.96494704, y: -0.08762158, z: 0.24738562}
+    bank: 0
+    inHandle: {x: -0.93994856, y: -0.20730853, z: -0.27114567}
+    outHandle: {x: -0.71606994, y: 0.05693441, z: 0.6957028}
+    yOffset: 54.740017
+    next: 02000000
+  - directionFromCenter: {x: -0.01580439, y: -0.57559127, z: -0.8175848}
+    bank: 0
+    inHandle: {x: -0.6778508, y: -0.35591716, z: -0.64330494}
+    outHandle: {x: 0, y: 0, z: 0}
+    yOffset: 54.740017
+    next: 
