@@ -15,13 +15,32 @@ namespace Dio.Player
         [Tooltip("Trail to toggle while a boost-class state is active.")]
         public TrailRenderer trail;
 
+        // One sharedMaterial per process — all cars + every boost trail share
+        // it so we never spawn N runtime materials. The shader is procedural
+        // (`_Time.y` driven) so they all swirl in lock-step, which actually
+        // reads better than per-car random phases.
+        static Material s_rainbowMat;
+
         CarStateMachine _sm;
 
         void Awake()
         {
             _sm = GetComponentInParent<CarStateMachine>();
             if (trail == null) trail = GetComponent<TrailRenderer>();
-            if (trail != null) trail.emitting = false;
+            if (trail != null)
+            {
+                trail.emitting = false;
+                trail.sharedMaterial = GetOrCreateRainbowMat();
+            }
+        }
+
+        static Material GetOrCreateRainbowMat()
+        {
+            if (s_rainbowMat != null) return s_rainbowMat;
+            var sh = Shader.Find("Dio/BoostRainbow");
+            if (sh == null) sh = Shader.Find("Sprites/Default");
+            if (sh != null) s_rainbowMat = new Material(sh) { name = "BoostRainbow (runtime)" };
+            return s_rainbowMat;
         }
 
         void Update()

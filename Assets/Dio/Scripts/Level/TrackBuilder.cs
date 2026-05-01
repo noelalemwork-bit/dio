@@ -167,7 +167,7 @@ namespace Dio.Level
             public static GuardOptions Default => new GuardOptions
             {
                 crossSection    = GuardCrossSection.Full,
-                wallHeight      = 2.2f,
+                wallHeight      = 2.6f,
                 lipOutward      = 0.4f,
                 skirtDepth      = 1f,
                 floorPad        = DefaultFloorPad,

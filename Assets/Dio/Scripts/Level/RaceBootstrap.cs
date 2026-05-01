@@ -428,6 +428,12 @@ namespace Dio.Level
                 mat.name = "TrackAsphalt (runtime)";
                 mat.color = new Color(0.10f, 0.10f, 0.12f, 1f);
                 if (mat.HasProperty("_BaseColor")) mat.SetColor("_BaseColor", mat.color); // URP/Lit takes _BaseColor
+                // Two-sided: track ribbons authored on a sphere can twist —
+                // a strict back-face cull would punch a hole in the surface
+                // when the camera dips below it (tunnels, undersides). 0 =
+                // Cull Off; URP/Lit and Standard both honour `_Cull`.
+                if (mat.HasProperty("_Cull")) mat.SetFloat("_Cull", 0f);
+                if (mat.HasProperty("_CullMode")) mat.SetFloat("_CullMode", 0f);
                 rend.sharedMaterial = mat;
             }
             // Tag the track with its surface type so wheels colliding against

@@ -12,7 +12,6 @@ MonoBehaviour:
   m_Script: {fileID: 11500000, guid: 1bc9a7716bc36b04f93b3d69603db1de, type: 3}
   m_Name: Eu2rope
   m_EditorClassIdentifier: Assembly-CSharp::Dio.Level.LevelData
-  displayName: Eu 2rope
   circumference: 900
   trackRatio: 1.5
   trackWidth: 15
@@ -22,34 +21,40 @@ MonoBehaviour:
     inHandle: {x: 0, y: 0, z: 0}
     outHandle: {x: -0.0035178121, y: 0.6313895, z: -0.7754579}
     yOffset: 22.220127
+    guardRailFloating: 0
     next: 01000000
   - directionFromCenter: {x: -0.32888678, y: 0.67076486, z: -0.6647616}
     bank: 0
-    inHandle: {x: -0.083431765, y: 0.95483184, z: -0.28519347}
+    inHandle: {x: -0.08343178, y: 0.95483184, z: -0.28519344}
     outHandle: {x: -0.4806044, y: 0.1955204, z: -0.8548633}
     yOffset: 33.63624
+    guardRailFloating: 0
     next: 0200000005000000
   - directionFromCenter: {x: -0.34245607, y: 0.035034917, z: -0.93888044}
     bank: 0
-    inHandle: {x: -0.58811504, y: 0.05726318, z: -0.80674756}
+    inHandle: {x: -0.58811486, y: 0.05726317, z: -0.8067477}
     outHandle: {x: -0.06998175, y: 0.010063315, z: -0.9974975}
     yOffset: 7.154695
+    guardRailFloating: 0
     next: 03000000
   - directionFromCenter: {x: 0.38843155, y: 0.01402648, z: -0.92137086}
     bank: 0
-    inHandle: {x: 0.3029867, y: -0.50117826, z: -0.8105674}
+    inHandle: {x: 0.30298692, y: -0.5011781, z: -0.8105674}
     outHandle: {x: 0.38819602, y: 0.3108968, z: -0.86755234}
     yOffset: 29.567135
+    guardRailFloating: 0
     next: 04000000
   - directionFromCenter: {x: 0.4860817, y: 0.5474312, z: -0.68120754}
     bank: 0
-    inHandle: {x: 0.78984433, y: 0.11555181, z: -0.60232353}
+    inHandle: {x: 0.7898443, y: 0.115551844, z: -0.6023236}
     outHandle: {x: 0.25746155, y: 0.72184753, z: -0.6423782}
     yOffset: 19.144657
+    guardRailFloating: 0
     next: 05000000
   - directionFromCenter: {x: 0.1656317, y: 0.16961877, z: -0.97149146}
     bank: 0
     inHandle: {x: 0.016259287, y: 0.64009166, z: -0.7681265}
     outHandle: {x: 0, y: 0, z: 0}
     yOffset: 30.108704
+    guardRailFloating: 0
     next: 

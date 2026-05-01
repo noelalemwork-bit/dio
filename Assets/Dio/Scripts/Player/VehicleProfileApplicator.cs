@@ -29,6 +29,41 @@ namespace Dio.Player
             ApplyCabin(root, p);
             ApplyWheels(root, p);
             ApplyPhysics(root, p);
+            // Kenney chassis meshes (and the procedural cube body) often dip
+            // into the WheelCollider's downward raycast envelope. Without
+            // this pass each WheelCollider would intermittently report the
+            // car's own body MeshCollider as the ground surface, producing a
+            // chronic micro-bump as suspension snaps back. Doing it last —
+            // after ApplyBody has swapped the MeshCollider's sharedMesh to
+            // the profile's body mesh — keeps the ignore paired with the
+            // current convex hull, not a stale primitive cube.
+            IgnoreSelfCollisions(root);
+        }
+
+        // Server + every client should call this whenever the profile changes
+        // — Physics.IgnoreCollision pairs are runtime state, not serialized
+        // through the prefab, so they're per-instance per-process. Cheap.
+        public static void IgnoreSelfCollisions(GameObject root)
+        {
+            if (root == null) return;
+            var wheels = root.GetComponentsInChildren<WheelCollider>(true);
+            if (wheels == null || wheels.Length == 0) return;
+            var allColliders = root.GetComponentsInChildren<Collider>(true);
+            for (int wi = 0; wi < wheels.Length; wi++)
+            {
+                var w = wheels[wi];
+                if (w == null) continue;
+                for (int ci = 0; ci < allColliders.Length; ci++)
+                {
+                    var other = allColliders[ci];
+                    if (other == null) continue;
+                    if (other == w) continue;
+                    if (other is WheelCollider) continue;
+                    if (other.transform.root != root.transform) continue; // never ignore cross-car
+                    try { Physics.IgnoreCollision(w, other, true); }
+                    catch { /* terrain colliders / disabled colliders — fine to skip */ }
+                }
+            }
         }
 
         static void ApplyBody(GameObject root, VehicleProfile p)
@@ -41,10 +76,75 @@ namespace Dio.Player
             if (mf != null && p.bodyMesh != null) mf.sharedMesh = p.bodyMesh;
             var mr = body.GetComponent<MeshRenderer>();
             if (mr != null && p.bodyMaterial != null) mr.sharedMaterial = p.bodyMaterial;
-            // Sync the convex hull collider to the new mesh too — otherwise the
-            // car bumps off invisible cube edges from the procedural fallback.
-            var mc = body.GetComponent<MeshCollider>();
-            if (mc != null && p.bodyMesh != null) mc.sharedMesh = p.bodyMesh;
+
+            // The base Car.prefab is a primitive Cube — its BoxCollider is
+            // 1×1×1 in mesh-local space, fine for the cube body, wrong for any
+            // Kenney mesh that has its own bounds. Without this fit, the box
+            // stays cube-sized while the mesh swaps to something taller, so
+            // the box's bottom dips below the wheel rest line and the chassis
+            // grounds out before the wheels can. Refit on every profile apply.
+            var activeMesh = mf != null ? mf.sharedMesh : null;
+            FitBodyCollider(body, activeMesh, p);
+        }
+
+        // Replace whatever collider exists on Body with a BoxCollider fitted
+        // to the active mesh's bounds, with the bottom clamped above the
+        // wheel rest plane in chassis-local space. Box (not Mesh) on
+        // purpose: Kenney chassis don't always produce sane convex hulls,
+        // and a tight box matches the visual silhouette tightly enough for
+        // arcade racing while being faster + easier to reason about.
+        static void FitBodyCollider(Transform body, Mesh mesh, VehicleProfile p)
+        {
+            if (!p.addBodyCollider)
+            {
+                var any = body.GetComponent<Collider>();
+                if (any != null) Object.Destroy(any);
+                return;
+            }
+            // Strip any MeshCollider left over from the per-profile prefab
+            // path — we standardise on BoxCollider now.
+            var oldMesh = body.GetComponent<MeshCollider>();
+            if (oldMesh != null) Object.Destroy(oldMesh);
+
+            var box = body.GetComponent<BoxCollider>();
+            if (box == null) box = body.gameObject.AddComponent<BoxCollider>();
+
+            // Default: unit box centred at origin (matches the cube primitive).
+            Vector3 center = Vector3.zero;
+            Vector3 size = Vector3.one;
+            if (mesh != null)
+            {
+                var b = mesh.bounds;       // mesh-local == body pre-scale
+                center = b.center;
+                size   = b.size;
+            }
+
+            // Wheel safety: the box's bottom in CHASSIS-LOCAL space must sit
+            // at or above `wheelRadius * 0.65f`, so the WheelCollider's
+            // downward suspension raycast (origin at WheelColliderY, length
+            // = suspensionDistance + wheelRadius) cannot ever read the body
+            // as the ground surface. If the raw mesh bounds dip lower, lift
+            // the box bottom and shrink size.y; cap is the box top.
+            float scaleY = Mathf.Abs(p.bodyScale.y);
+            if (scaleY > 1e-4f)
+            {
+                float bottomLocal = center.y - size.y * 0.5f;
+                float topLocal    = center.y + size.y * 0.5f;
+                float bottomChassis = p.bodyOffset.y + bottomLocal * p.bodyScale.y;
+                float minBottomChassis = p.wheelRadius * 0.65f;
+                if (bottomChassis < minBottomChassis)
+                {
+                    float newBottomLocal = (minBottomChassis - p.bodyOffset.y) / p.bodyScale.y;
+                    if (newBottomLocal < topLocal - 0.02f)
+                    {
+                        size.y = topLocal - newBottomLocal;
+                        center.y = (topLocal + newBottomLocal) * 0.5f;
+                    }
+                }
+            }
+
+            box.center = center;
+            box.size   = size;
         }
 
         static void ApplyCabin(GameObject root, VehicleProfile p)

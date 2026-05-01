@@ -235,7 +235,17 @@ namespace Dio.Powerups.EditorTools
 
         static GameObject BuildGreenShell()
         {
-            var go = NewSphere("GreenShell", new Color(0.36f, 0.86f, 0.40f, 1f), 0.5f, false);
+            // Visually a Penalty Shot — soccer ball with the procedural
+            // Dio/PenaltyShot shader. The class stays GreenShellObstacle
+            // because every prefab GUID + serialised reference in shipped
+            // levels keys off that name; only the visible identity changes.
+            var go = NewSphere("GreenShell", Color.white, 0.5f, false);
+            var rend = go.GetComponent<Renderer>();
+            if (rend != null)
+            {
+                var sh = Shader.Find("Dio/PenaltyShot") ?? Shader.Find("Standard");
+                rend.sharedMaterial = GetOrCreateMatNamed("PU_PenaltyShot", sh, Color.white);
+            }
             var rb = go.AddComponent<Rigidbody>();
             rb.useGravity = false;
             rb.mass = 5f;
@@ -243,7 +253,7 @@ namespace Dio.Powerups.EditorTools
             go.AddComponent<NetworkIdentity>();
             Dio.Net.EditorTools.NetworkTransformConfigurer.Configure(go, fastCar:false);
             go.AddComponent<GreenShellObstacle>();
-            AddLabel(go.transform, "Green", 1.0f);
+            AddLabel(go.transform, "Penalty", 1.0f);
             return SaveAndDestroy(go, "GreenShell");
         }
 

@@ -46,7 +46,11 @@ namespace Dio.Level.Obstacles
             if (car != null && !IsOwnerImmune(car))
             {
                 RpcSpawnImpactBurst(transform.position, new Color(0.20f, 0.70f, 1f, 1f), 1.0f);
-                ApplyClientImpact(car, transform.position, 9f, 0.8f, 6f);
+                // Heavier hit + a real vertical pop. Green shell is now
+                // distinct from Blue: it's the BIG SHOVE (lots of horizontal
+                // displacement, a satisfying upward bounce, short blind so
+                // you can recover quickly from a clean line shot).
+                ApplyClientImpact(car, transform.position, 16f, 8f, 7f);
                 ApplyState(car, new GreenShellBlindState(), blindDuration);
                 if (car.connectionToClient != null)
                     car.TargetFlashScreen(car.connectionToClient, PowerupKind.GreenShell, blindDuration);

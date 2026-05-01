@@ -189,6 +189,12 @@ namespace Dio.Player.EditorTools
             var rightSync = trailRight.gameObject.AddComponent<CarBoostTrail>();
             rightSync.trail = trailRight;
 
+            // -- Burnout smoke (rear wheels at speed) --
+            // Pooled flat-shaded sphere puffs spawned from the rear axle when
+            // the car is grounded and above its speed threshold. See
+            // BurnoutSmoke.cs — no allocations after warm-up.
+            root.AddComponent<BurnoutSmoke>();
+
             // -- Save prefab --
             // CRITICAL: do NOT delete first. SaveAsPrefabAsset overwrites
             // an existing prefab IN PLACE, preserving its asset GUID and

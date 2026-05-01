@@ -87,8 +87,16 @@ namespace Dio.Net
         public static System.Action<bool, RaceStartMessage> OnRaceStarted;
         public static System.Action<RaceWonMessage> OnRaceWon;
         public static System.Action OnCountdownEnd;
+        // Fired on every peer when its NetworkClient disconnects — including
+        // the cascade case where the host quits and Mirror tears every client
+        // off. MainMenuController listens to send the UI back to the home page.
+        public static System.Action OnDisconnectedFromHost;
 
         bool _raceActive;
+        // Set true between ServerRestartRace and ServerStartRaceFromRestart so a
+        // double-press of R (or R + lobby button race) can't queue a second
+        // restart. Cleared in ServerStartRaceFromRestart on the way out.
+        bool _restarting;
         // Crossed the finish when within `FinishArcWindow` meters of the END
         // of the track's arc length. Smaller than the old WinDistanceThreshold
         // because arc-length is monotonic — once you reach the end, you're done,
@@ -147,6 +155,20 @@ namespace Dio.Net
             _runtimeCatalog.Clear();
             CachedManifest = new PlayerLevelManifestEntry[0];
             OnManifestChanged?.Invoke();
+            // Reset all per-race transients so a future "host again" starts clean.
+            _raceActive = false;
+            _restarting = false;
+            CancelInvoke(nameof(ServerCleanupRace));
+            CancelInvoke(nameof(ServerStartRaceFromRestart));
+            CancelInvoke(nameof(ServerSendRaceGo));
+        }
+
+        public override void OnStopClient()
+        {
+            base.OnStopClient();
+            // Whatever caused the disconnect — host quit, network drop, manual
+            // StopClient — surface a single "go home" event for the UI layer.
+            OnDisconnectedFromHost?.Invoke();
         }
 
         public override void OnStartClient()
@@ -317,6 +339,16 @@ namespace Dio.Net
             if (!CanStartRace())
             {
                 Debug.Log($"[Dio] ServerStartRace denied. players={_players.Count} min={minPlayers} soloBypass={soloBypass}");
+                return;
+            }
+            // Hard-idempotency: if a race is already running OR a restart is mid-
+            // flight, refuse to spawn a second set of cars. Without this guard a
+            // second click of "Start Race" + a stray R press during the win
+            // panel countdown can both call ServerStartRace and the player ends
+            // up with two cars stacked on the start line.
+            if (_raceActive || _restarting)
+            {
+                Debug.LogWarning($"[Dio] ServerStartRace ignored — raceActive={_raceActive} restarting={_restarting}.");
                 return;
             }
 
@@ -806,6 +838,15 @@ namespace Dio.Net
         [Server]
         public void ServerRestartRace()
         {
+            // Debounce — double-press of R (or R + lobby Start button) used to
+            // queue two restarts and double-spawn cars on the start grid.
+            if (_restarting)
+            {
+                Debug.Log("[Dio] ServerRestartRace ignored — already restarting.");
+                return;
+            }
+            _restarting = true;
+
             Debug.Log("[Dio] ServerRestartRace — host requested rematch on the same level.");
             CancelInvoke(nameof(ServerCleanupRace));
             CancelInvoke(nameof(ServerStartRaceFromRestart));
@@ -842,10 +883,9 @@ namespace Dio.Net
         [Server]
         void ServerStartRaceFromRestart()
         {
-            // Don't reroll the level — same _activeLevel survives across the
-            // teardown because we only clear it in ServerCleanupRace, which
-            // doesn't touch the field. ServerStartRace re-resolves anyway,
-            // and ResolveSelectedLevel returns the same host vote.
+            // Clear the debounce BEFORE calling ServerStartRace — otherwise the
+            // idempotency guard there would refuse the rematch.
+            _restarting = false;
             ServerStartRace();
         }
 

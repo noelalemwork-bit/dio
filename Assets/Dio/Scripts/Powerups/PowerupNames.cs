@@ -14,7 +14,7 @@ namespace Dio.Powerups
                 case PowerupKind.Lightning:   return "LIGHTNING";
                 case PowerupKind.Banana:      return "BANANA";
                 case PowerupKind.OilSlick:    return "OIL SLICK";
-                case PowerupKind.GreenShell:  return "GREEN SHELL";
+                case PowerupKind.GreenShell:  return "PENALTY SHOT";
                 case PowerupKind.BlueShell:   return "BLUE SHELL";
                 case PowerupKind.Bobomb:      return "BOB-OMB";
                 case PowerupKind.Tornado:     return "TORNADO";

@@ -1,0 +1,53 @@
+%YAML 1.1
+%TAG !u! tag:unity3d.com,2011:
+--- !u!114 &11400000
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 0}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: 1bc9a7716bc36b04f93b3d69603db1de, type: 3}
+  m_Name: LunarLagoon
+  m_EditorClassIdentifier: Assembly-CSharp::Dio.Level.LevelData
+  circumference: 1256.6371
+  trackRatio: 1
+  trackWidth: 25
+  points:
+  - directionFromCenter: {x: -0.37499952, y: 0.6660541, z: -0.6447847}
+    bank: 0
+    inHandle: {x: 0, y: 0, z: 0}
+    outHandle: {x: -0.15475334, y: 0.016395055, z: -0.9878171}
+    yOffset: 16.795227
+    guardRailFloating: 0
+    next: 01000000
+  - directionFromCenter: {x: 0.48372504, y: 0.68178666, z: -0.548796}
+    bank: 0
+    inHandle: {x: 0.121943325, y: 0.9797709, z: 0.15867853}
+    outHandle: {x: 0.49712762, y: -0.10722092, z: -0.86102724}
+    yOffset: 21.289299
+    guardRailFloating: 0
+    next: 02000000
+  - directionFromCenter: {x: -0.011907113, y: 0.49245816, z: -0.87025464}
+    bank: 0
+    inHandle: {x: 0.24814774, y: 0.6175818, z: -0.74633473}
+    outHandle: {x: -0.27078745, y: 0.31875822, z: -0.9083322}
+    yOffset: 21.289299
+    guardRailFloating: 0
+    next: 03000000
+  - directionFromCenter: {x: -0.09734702, y: -0.15897126, z: -0.98247224}
+    bank: 0
+    inHandle: {x: -0.057939183, y: 0.1768535, z: -0.9825303}
+    outHandle: {x: -0.12562504, y: -0.47662064, z: -0.8700869}
+    yOffset: 21.289299
+    guardRailFloating: 0
+    next: 04000000
+  - directionFromCenter: {x: -0.68911, y: 0.399382, z: -0.6046664}
+    bank: 0
+    inHandle: {x: -0.4399646, y: 0.13449202, z: -0.8878869}
+    outHandle: {x: 0, y: 0, z: 0}
+    yOffset: 21.289299
+    guardRailFloating: 0
+    next: 

@@ -115,6 +115,7 @@ namespace Dio.UI
             DioPlayer.OnRosterChanged += RefreshLobby;
             DioNetworkManager.OnRaceStarted += OnRaceStartedLocally;
             DioNetworkManager.OnRaceWon     += OnRaceWonLocally;
+            DioNetworkManager.OnDisconnectedFromHost += OnDisconnectedFromHost;
             if (winPanel != null) winPanel.SetActive(false);
 
             RefreshGating();
@@ -127,6 +128,40 @@ namespace Dio.UI
             DioPlayer.OnRosterChanged -= RefreshLobby;
             DioNetworkManager.OnRaceStarted -= OnRaceStartedLocally;
             DioNetworkManager.OnRaceWon     -= OnRaceWonLocally;
+            DioNetworkManager.OnDisconnectedFromHost -= OnDisconnectedFromHost;
+        }
+
+        void Update()
+        {
+            // Esc: ALWAYS quits whatever the player is currently in. As a host
+            // it stops the server (kicking every client → their MainMenuController
+            // sees OnClientDisconnect → goes home too). As a client it stops the
+            // local connection. Idle Esc is a no-op.
+            if (Input.GetKeyDown(KeyCode.Escape))
+            {
+                if (net != null && (Mirror.NetworkServer.active || Mirror.NetworkClient.isConnected))
+                {
+                    net.StopAll();
+                }
+                ReturnToHomeScreen();
+            }
+        }
+
+        void OnDisconnectedFromHost()
+        {
+            // Host quit (or the server crashed). Snap every client back to the
+            // idle/home screen — a stale lobby UI on a dead connection is the
+            // most confusing state for the user to find themselves in.
+            ReturnToHomeScreen();
+        }
+
+        void ReturnToHomeScreen()
+        {
+            if (winPanel != null) winPanel.SetActive(false);
+            if (hudRoot != null) hudRoot.SetActive(false);
+            if (menuRoot != null) menuRoot.SetActive(true);
+            CancelInvoke(nameof(ReturnToLobbyAfterWin));
+            ShowIdle();
         }
 
         // ---------- Top bar ----------

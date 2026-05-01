@@ -17,9 +17,11 @@ namespace Dio.Level.Obstacles
     public class BlueShellObstacle : Obstacle
     {
         public float speed = 50f;
-        public float explosionRadius = 9f;
-        public float explosionImpulse = 15f;
-        public float blindDuration = 5f;
+        public float explosionRadius = 11f;            // bigger AOE than green
+        public float explosionTangential = 8f;         // less horizontal shove than green
+        public float explosionVertical = 16f;          // BIG vertical launch — distinguishes blue from green
+        public float explosionAngular = 9f;
+        public float blindDuration = 4f;
         public Transform planet;
         public float planetRadius = 200f;
 
@@ -76,7 +78,12 @@ namespace Dio.Level.Obstacles
                 var car = CarOf(h);
                 if (car == null || !seen.Add(car)) continue;
                 ApplyState(car, new BlueShellBlindState(), blindDuration);
-                ApplyClientImpact(car, transform.position, explosionImpulse, 1.0f, 8f);
+                // Blue's distinctive feel vs Green: a giant VERTICAL launch.
+                // Green = horizontal shove + small upward; Blue = small horizontal
+                // + huge upward, so victims rocket skyward and lose their racing
+                // line for ~2s of airtime instead of just being knocked sideways.
+                ApplyClientImpact(car, transform.position,
+                    explosionTangential, explosionVertical, explosionAngular);
                 if (car.connectionToClient != null)
                     car.TargetFlashScreen(car.connectionToClient, Dio.Powerups.PowerupKind.BlueShell, blindDuration);
             }

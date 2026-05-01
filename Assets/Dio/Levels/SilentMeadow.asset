@@ -10,30 +10,23 @@ MonoBehaviour:
   m_Enabled: 1
   m_EditorHideFlags: 0
   m_Script: {fileID: 11500000, guid: 1bc9a7716bc36b04f93b3d69603db1de, type: 3}
-  m_Name: Level1
+  m_Name: SilentMeadow
   m_EditorClassIdentifier: Assembly-CSharp::Dio.Level.LevelData
-  circumference: 900
+  circumference: 1256.6371
   trackRatio: 1
   trackWidth: 15
   points:
-  - directionFromCenter: {x: 0.124547474, y: -0.06688089, z: -0.98995703}
+  - directionFromCenter: {x: 0, y: 1, z: 0}
     bank: 0
     inHandle: {x: 0, y: 0, z: 0}
-    outHandle: {x: -0.07557567, y: -0.23491362, z: -0.9690737}
+    outHandle: {x: 0.5714879, y: 0.6858197, z: 0.450614}
     yOffset: 0
     guardRailFloating: 0
     next: 01000000
-  - directionFromCenter: {x: -0.42192292, y: 0.22784656, z: -0.8775347}
+  - directionFromCenter: {x: 0.7838753, y: -0.059302684, z: 0.6180799}
     bank: 0
-    inHandle: {x: -0.18423834, y: 0.16549051, z: -0.96884936}
-    outHandle: {x: -0.80364144, y: 0.3033247, z: -0.5120103}
-    yOffset: 18.853954
-    guardRailFloating: 0
-    next: 02000000
-  - directionFromCenter: {x: -0.46755233, y: -0.4301289, z: -0.772259}
-    bank: 0
-    inHandle: {x: -0.5064942, y: 0.095540024, z: -0.85693395}
+    inHandle: {x: 0.5714879, y: 0.6858197, z: 0.450614}
     outHandle: {x: 0, y: 0, z: 0}
-    yOffset: 29.60662
+    yOffset: 0
     guardRailFloating: 0
     next: 

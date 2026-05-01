@@ -49,6 +49,23 @@ namespace Dio.Level.Obstacles
 
         Transform _meshRoot;
 
+        // ----- Track-walking state (server-only) -----
+        // The tornado walks the level's adjacency graph one edge at a time so
+        // it always rides the racing line (including branches). At each
+        // anchor it picks an outgoing edge at random; when it reaches the
+        // finish point it despawns gracefully — no off-track drift, no
+        // ghosting past the end of the level.
+        int   _edgeFrom = -1;
+        int   _edgeTo   = -1;
+        float _edgeT;        // [0..1] along the current bezier edge
+        bool  _walkInit;
+        // Lateral oscillation: a sin wave perpendicular to the tangent so the
+        // tornado side-steps across the track width as it advances.
+        [Header("Lateral oscillation")]
+        public float lateralAmplitude = 2.5f;   // metres off the centerline at the peaks
+        public float lateralPeriod    = 2.4f;   // seconds per full sine cycle
+        float _walkClock;
+
         public override void OnStartServer()
         {
             base.OnStartServer();
@@ -77,22 +94,127 @@ namespace Dio.Level.Obstacles
 
             if (!isServer) return;
 
-            // Server: glide forward along the tangent plane, re-snap to the
-            // surface every tick. NetworkTransform broadcasts the new pose.
+            var lvl = Dio.Net.DioNetworkManager.Instance != null
+                ? Dio.Net.DioNetworkManager.Instance.ActiveLevel : null;
             Vector3 planetCenter = planet != null ? planet.position : Vector3.zero;
-            Vector3 dir = (transform.position - planetCenter).normalized;
-            if (dir.sqrMagnitude < 1e-4f) dir = Vector3.up;
-            Vector3 fwd = Vector3.ProjectOnPlane(transform.forward, dir).normalized;
-            if (fwd.sqrMagnitude < 1e-4f) fwd = Vector3.Cross(dir, Vector3.right).normalized;
 
+            if (lvl != null && lvl.HasMinimum)
+            {
+                lvl.EnsureLinearChainNext();
+                if (!_walkInit) InitWalkFromCurrentPosition(lvl, planetCenter);
+
+                _walkClock += Time.deltaTime;
+
+                // Step forward by forwardSpeed arc-units, but in t-space we
+                // need to divide by THIS edge's arc length so a long edge
+                // takes proportionally longer. Approximate with the chord
+                // (anchor-to-anchor great-circle arc) — close enough for the
+                // tornado's purposes.
+                float edgeArcLen = ApproxEdgeArcLength(lvl, _edgeFrom, _edgeTo);
+                if (edgeArcLen < 0.01f) edgeArcLen = 1f;
+                _edgeT += forwardSpeed * Time.deltaTime / edgeArcLen;
+
+                // Advance through anchors when we cross the end of an edge.
+                while (_edgeT >= 1f && isServer)
+                {
+                    int nextAnchor = _edgeTo;
+                    int finishIdx = lvl.points.Count - 1;
+                    if (nextAnchor == finishIdx)
+                    {
+                        Debug.Log("[Tornado] reached finish anchor — despawning gracefully.");
+                        ServerDespawn();
+                        return;
+                    }
+                    var outNexts = lvl.points[nextAnchor].next;
+                    if (outNexts == null || outNexts.Count == 0)
+                    {
+                        Debug.Log("[Tornado] dead-end anchor — despawning.");
+                        ServerDespawn();
+                        return;
+                    }
+                    int picked = outNexts.Count == 1 ? outNexts[0]
+                        : outNexts[Random.Range(0, outNexts.Count)]; // branch: random
+                    _edgeFrom = nextAnchor;
+                    _edgeTo   = picked;
+                    _edgeT    = _edgeT - 1f;
+                    edgeArcLen = ApproxEdgeArcLength(lvl, _edgeFrom, _edgeTo);
+                    if (edgeArcLen < 0.01f) edgeArcLen = 1f;
+                }
+
+                // Sample the current edge at t. SphericalBezier returns a unit
+                // direction; multiply by the planet radius to get the surface
+                // point, then add the lateral oscillation in the tangent plane.
+                lvl.GetEdge(_edgeFrom, _edgeTo, out Vector3 a, out Vector3 ah, out Vector3 bh, out Vector3 b);
+                const float DerivEps = 0.001f;
+                Vector3 dir       = Dio.Level.GeodesicUtil.SphericalBezier(a, ah, bh, b, _edgeT);
+                Vector3 dirAhead  = Dio.Level.GeodesicUtil.SphericalBezier(a, ah, bh, b, Mathf.Min(1f, _edgeT + DerivEps));
+                Vector3 newPos    = planetCenter + dir * planetRadius;
+                Vector3 surfaceUp = (newPos - planetCenter).normalized;
+                Vector3 newTan    = Vector3.ProjectOnPlane((dirAhead - dir), surfaceUp).normalized;
+                if (newTan.sqrMagnitude < 1e-6f) newTan = transform.forward;
+
+                // Lateral wobble: oscillate side-to-side along the tangent-plane
+                // RIGHT vector. Amplitude is fixed in metres so it scales with
+                // track width naturally.
+                Vector3 right = Vector3.Cross(surfaceUp, newTan).normalized;
+                float wobble = Mathf.Sin(_walkClock * (Mathf.PI * 2f / Mathf.Max(0.01f, lateralPeriod))) * lateralAmplitude;
+                newPos += right * wobble;
+
+                transform.position = newPos;
+                transform.rotation = Quaternion.LookRotation(newTan, surfaceUp);
+                return;
+            }
+
+            // Fallback: no level resolvable. Glide along the local tangent
+            // plane so the tornado is at least kinetic instead of pinned.
+            Vector3 dirf = (transform.position - planetCenter).normalized;
+            if (dirf.sqrMagnitude < 1e-4f) dirf = Vector3.up;
+            Vector3 fwd = Vector3.ProjectOnPlane(transform.forward, dirf).normalized;
+            if (fwd.sqrMagnitude < 1e-4f) fwd = Vector3.Cross(dirf, Vector3.right).normalized;
             transform.position += fwd * forwardSpeed * Time.deltaTime;
-            // Re-snap radial.
-            dir = (transform.position - planetCenter).normalized;
-            transform.position = planetCenter + dir * planetRadius;
-            // Re-orient: forward in tangent plane, up = surface normal.
-            Vector3 fwdT = Vector3.ProjectOnPlane(transform.forward, dir).normalized;
-            if (fwdT.sqrMagnitude < 1e-4f) fwdT = fwd;
-            transform.rotation = Quaternion.LookRotation(fwdT, dir);
+            dirf = (transform.position - planetCenter).normalized;
+            transform.position = planetCenter + dirf * planetRadius;
+            Vector3 fwdT2 = Vector3.ProjectOnPlane(transform.forward, dirf).normalized;
+            if (fwdT2.sqrMagnitude < 1e-4f) fwdT2 = fwd;
+            transform.rotation = Quaternion.LookRotation(fwdT2, dirf);
+        }
+
+        // Pick the anchor closest to the tornado's current world position as
+        // `from`, then `to = first outgoing edge`. Stays consistent across
+        // host vs guest because we route everything through the LevelData
+        // struct (server-authoritative) rather than per-peer state.
+        void InitWalkFromCurrentPosition(Dio.Level.LevelData lvl, Vector3 planetCenter)
+        {
+            Vector3 ourDir = (transform.position - planetCenter).normalized;
+            int bestIdx = 0;
+            float bestDot = float.NegativeInfinity;
+            for (int i = 0; i < lvl.points.Count; i++)
+            {
+                float d = Vector3.Dot(ourDir, lvl.DirOf(i));
+                if (d > bestDot) { bestDot = d; bestIdx = i; }
+            }
+            int finishIdx = lvl.points.Count - 1;
+            // If we land on the finish anchor at spawn, walk backwards one
+            // anchor so we have somewhere to GO before despawning.
+            if (bestIdx == finishIdx) bestIdx = Mathf.Max(0, bestIdx - 1);
+
+            var outNexts = lvl.points[bestIdx].next;
+            int toIdx = (outNexts != null && outNexts.Count > 0)
+                ? outNexts[Random.Range(0, outNexts.Count)]
+                : Mathf.Min(finishIdx, bestIdx + 1);
+
+            _edgeFrom  = bestIdx;
+            _edgeTo    = toIdx;
+            _edgeT     = 0f;
+            _walkInit  = true;
+        }
+
+        static float ApproxEdgeArcLength(Dio.Level.LevelData lvl, int from, int to)
+        {
+            Vector3 a = lvl.DirOf(from);
+            Vector3 b = lvl.DirOf(to);
+            float angle = Mathf.Acos(Mathf.Clamp(Vector3.Dot(a, b), -1f, 1f));
+            return angle * lvl.NominalRadius;
         }
 
         void SnapToSurface()
@@ -219,10 +341,24 @@ namespace Dio.Level.Obstacles
             if (car == null) return;
             if (IsOwnerImmune(car)) return;
             RpcSpawnImpactBurst(car.transform.position, new Color(0.78f, 0.88f, 1f, 1f), 1.0f);
-            ApplyClientImpact(car, transform.position, 7f, 0.9f, 9f);
-            ApplyState(car, new TornadoTumbleState(), tumbleDuration);
+
+            // Tornado-specific impact: a SWIRL around the surface-up axis (so
+            // the car genuinely spins as if grabbed by the funnel) plus a big
+            // upward suck. ApplyClientImpact's angular axis is horizontal
+            // (cross(up, away)) which produces a flip — we want yaw, not flip,
+            // so we apply yaw directly via TargetApplyImpact.
+            Vector3 planetCenter = Dio.Level.RaceBootstrap.CurrentPlanet != null
+                ? Dio.Level.RaceBootstrap.CurrentPlanet.transform.position : Vector3.zero;
+            Vector3 up = (car.transform.position - planetCenter).normalized;
+            if (up.sqrMagnitude < 0.0001f) up = car.transform.up;
+            Vector3 vel = up * 6f;                 // upward suck
+            Vector3 ang = up * 22f;                // strong yaw spin
             if (car.connectionToClient != null)
+            {
+                car.TargetApplyImpact(car.connectionToClient, vel, ang);
                 car.TargetFlashScreen(car.connectionToClient, Dio.Powerups.PowerupKind.Tornado, tumbleDuration);
+            }
+            ApplyState(car, new TornadoTumbleState(), tumbleDuration);
         }
     }
 }

@@ -32,14 +32,14 @@ MonoBehaviour:
     next: 02000000
   - directionFromCenter: {x: 0.3358802, y: 0.9063182, z: 0.2564601}
     bank: 0
-    inHandle: {x: 0.11817277, y: 0.96456116, z: 0.23591727}
+    inHandle: {x: 0.118172534, y: 0.9645612, z: 0.23591724}
     outHandle: {x: 0.6361845, y: 0.72563314, z: 0.26215598}
     yOffset: 15.334783
     guardRailFloating: 0
     next: 03000000
   - directionFromCenter: {x: 0.6548563, y: 0.7385417, z: -0.16037256}
     bank: 0
-    inHandle: {x: 0.5999924, y: 0.80000573, z: 0.00020077825}
+    inHandle: {x: 0.5999925, y: 0.8000056, z: 0.00020046532}
     outHandle: {x: 0.69351774, y: 0.62684363, z: -0.35510582}
     yOffset: 52.998734
     guardRailFloating: 1
@@ -53,7 +53,7 @@ MonoBehaviour:
     next: 05000000
   - directionFromCenter: {x: 0.5364244, y: -0.016899556, z: -0.8437792}
     bank: 0
-    inHandle: {x: 0.20631438, y: 0.19557017, z: -0.95874226}
+    inHandle: {x: 0.20631453, y: 0.1955701, z: -0.95874226}
     outHandle: {x: 0.67491746, y: -0.1279705, z: -0.72671175}
     yOffset: 30.114588
     guardRailFloating: 0
@@ -67,7 +67,7 @@ MonoBehaviour:
     next: 07000000
   - directionFromCenter: {x: 0.87457097, y: 0.22869593, z: -0.42757902}
     bank: 0
-    inHandle: {x: 0.7383347, y: 0.11082719, z: -0.66526634}
+    inHandle: {x: 0.73833483, y: 0.11082729, z: -0.66526616}
     outHandle: {x: 0.9330154, y: 0.32622254, z: -0.15185899}
     yOffset: 24.934834
     guardRailFloating: 0
@@ -81,7 +81,7 @@ MonoBehaviour:
     next: 09000000
   - directionFromCenter: {x: 0.37253708, y: 0.92801595, z: 0.0015858951}
     bank: 0
-    inHandle: {x: 0.5999955, y: 0.7349179, z: -0.31607157}
+    inHandle: {x: 0.5999954, y: 0.73491794, z: -0.31607145}
     outHandle: {x: 0.0743227, y: 0.94485563, z: 0.318942}
     yOffset: 56.06623
     guardRailFloating: 1
