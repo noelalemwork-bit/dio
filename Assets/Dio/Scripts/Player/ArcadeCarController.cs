@@ -136,9 +136,15 @@ namespace Dio.Player
 
         void Update()
         {
-            // Tab to cycle camera if no input action is bound.
-            if (cameraCycleAction == null && Keyboard.current != null && Keyboard.current.tabKey.wasPressedThisFrame)
-                OnCameraCycleRequested?.Invoke();
+            // Camera cycle without an InputActionReference: Tab on keyboard
+            // or North face button (Y / Triangle) on a gamepad. Pressed-
+            // this-frame so a held button doesn't cycle every tick.
+            if (cameraCycleAction == null)
+            {
+                bool tab = Keyboard.current != null && Keyboard.current.tabKey.wasPressedThisFrame;
+                bool padY = Gamepad.current != null && Gamepad.current.buttonNorth.wasPressedThisFrame;
+                if (tab || padY) OnCameraCycleRequested?.Invoke();
+            }
 
             UpdateWheelVisuals(Time.deltaTime);
         }
@@ -195,27 +201,61 @@ namespace Dio.Player
             if (moveAction != null && moveAction.action.enabled)
                 return moveAction.action.ReadValue<Vector2>();
 
+            // Gamepad path: left stick steers + supplies analog throttle, with
+            // right trigger acting as a "throttle override" so players who
+            // prefer trigger-throttle (Forza-style) get full forward without
+            // pushing the stick forward. Triggers don't reverse — that's the
+            // stick's job (back-stick = reverse). D-pad doubles for digital
+            // input on pads without reliable analog sticks.
+            Vector2 stick = Vector2.zero;
+            var pad = Gamepad.current;
+            if (pad != null)
+            {
+                Vector2 ls = pad.leftStick.ReadValue();
+                if (ls.sqrMagnitude < 0.04f) ls = Vector2.zero; // small dead zone (sticks past Input System defaults can drift)
+                Vector2 dp = pad.dpad.ReadValue();
+                stick = ls + dp;
+                stick.x = Mathf.Clamp(stick.x, -1f, 1f);
+                stick.y = Mathf.Clamp(stick.y, -1f, 1f);
+                float rt = pad.rightTrigger.ReadValue();
+                if (rt > stick.y) stick.y = rt;
+            }
+
             var kb = Keyboard.current;
-            if (kb == null) return Vector2.zero;
-            float x = (kb.aKey.isPressed || kb.leftArrowKey.isPressed ? -1f : 0f)
-                    + (kb.dKey.isPressed || kb.rightArrowKey.isPressed ?  1f : 0f);
-            float y = (kb.sKey.isPressed || kb.downArrowKey.isPressed ? -1f : 0f)
-                    + (kb.wKey.isPressed || kb.upArrowKey.isPressed   ?  1f : 0f);
-            return new Vector2(x, y);
+            if (kb != null)
+            {
+                float x = (kb.aKey.isPressed || kb.leftArrowKey.isPressed ? -1f : 0f)
+                        + (kb.dKey.isPressed || kb.rightArrowKey.isPressed ?  1f : 0f);
+                float y = (kb.sKey.isPressed || kb.downArrowKey.isPressed ? -1f : 0f)
+                        + (kb.wKey.isPressed || kb.upArrowKey.isPressed   ?  1f : 0f);
+                if (Mathf.Abs(x) > Mathf.Abs(stick.x)) stick.x = x;
+                if (Mathf.Abs(y) > Mathf.Abs(stick.y)) stick.y = y;
+            }
+            return stick;
         }
 
         bool ReadBrake()
         {
             if (brakeAction != null && brakeAction.action.enabled)
                 return brakeAction.action.IsPressed();
-            return Keyboard.current != null && Keyboard.current.spaceKey.isPressed;
+            // Brake = Space on keyboard, Left Trigger on gamepad. Threshold
+            // 0.3 because a half-pulled trigger should already start braking
+            // — racers expect immediate response.
+            if (Keyboard.current != null && Keyboard.current.spaceKey.isPressed) return true;
+            var pad = Gamepad.current;
+            return pad != null && pad.leftTrigger.ReadValue() > 0.3f;
         }
 
         bool ReadHandbrake()
         {
             if (handbrakeAction != null && handbrakeAction.action.enabled)
                 return handbrakeAction.action.IsPressed();
-            return Keyboard.current != null && Keyboard.current.leftShiftKey.isPressed;
+            // Handbrake = LShift on keyboard, B / Circle (East) or right
+            // shoulder bumper on gamepad. East button is the natural drift
+            // button (closest to thumb on the pad's right cluster).
+            if (Keyboard.current != null && Keyboard.current.leftShiftKey.isPressed) return true;
+            var pad = Gamepad.current;
+            return pad != null && (pad.buttonEast.isPressed || pad.rightShoulder.isPressed);
         }
 
         void FixedUpdate()

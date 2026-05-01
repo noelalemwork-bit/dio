@@ -70,8 +70,20 @@ namespace Dio.Level
         {
             var list = new List<MeshSnapshot>();
             if (source == null) return list;
+            // Start from the source's parent's localToWorldMatrix so any
+            // ancestor transform (e.g. a level root that's offset from the
+            // world origin) is included. At authoring time the FBX prefab
+            // has no parent, so this is identity and behaves identically to
+            // before; at runtime, the spawned Globe is parented under
+            // RaceBootstrap and we MUST account for the parent chain or
+            // the runtime raycaster will return surface positions in
+            // RaceBootstrap-local space (which differs from world space if
+            // the level was ever moved).
             var rootScale = Matrix4x4.Scale(Vector3.one * globalScale);
-            CollectRecursive(source.transform, rootScale, Matrix4x4.identity, list);
+            Matrix4x4 ancestor = source.transform.parent != null
+                ? source.transform.parent.localToWorldMatrix
+                : Matrix4x4.identity;
+            CollectRecursive(source.transform, rootScale, ancestor, list);
             return list;
         }
 

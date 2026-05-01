@@ -69,8 +69,14 @@ namespace Dio.Powerups
             bool pressed = false;
             if (activateAction != null && activateAction.action.enabled)
                 pressed = activateAction.action.WasPressedThisFrame();
-            else if (Keyboard.current != null)
-                pressed = Keyboard.current.eKey.wasPressedThisFrame;
+            else
+            {
+                // Activate fallback: E on keyboard, South face button (A on
+                // Xbox / Cross on PS) on a gamepad. South is the universal
+                // "confirm" button across platforms.
+                if (Keyboard.current != null && Keyboard.current.eKey.wasPressedThisFrame) pressed = true;
+                if (!pressed && Gamepad.current != null && Gamepad.current.buttonSouth.wasPressedThisFrame) pressed = true;
+            }
 
             if (pressed) CmdActivate();
         }

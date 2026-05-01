@@ -572,8 +572,12 @@ namespace Dio.UI.EditorTools
             cam.backgroundColor = new Color(0.94f, 0.92f, 0.86f, 1f);
             cam.orthographic = false;
 
+            // EventSystem uses the new Input System's UI module so gamepad
+            // (left stick / D-pad / South-button) drives Selectable
+            // navigation alongside mouse + keyboard. StandaloneInputModule
+            // only honours the legacy input manager, which we don't ship.
             new GameObject("EventSystem", typeof(UnityEngine.EventSystems.EventSystem),
-                typeof(UnityEngine.EventSystems.StandaloneInputModule));
+                typeof(UnityEngine.InputSystem.UI.InputSystemUIInputModule));
 
             // Warm directional sun light, low on the horizon to match the sunset skybox.
             var sunGo = new GameObject("Sun Light", typeof(Light));

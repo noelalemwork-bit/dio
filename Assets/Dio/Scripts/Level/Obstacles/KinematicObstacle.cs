@@ -142,13 +142,17 @@ namespace Dio.Level.Obstacles
                 }
 
                 // Sample the current edge at t. SphericalBezier returns a unit
-                // direction; multiply by the planet radius to get the surface
-                // point, then add the lateral oscillation in the tangent plane.
+                // direction; resolve the actual surface radius in that
+                // direction (so the funnel hugs hills + valleys instead of
+                // floating at constant `planetRadius`), then add the lateral
+                // oscillation in the tangent plane.
                 lvl.GetEdge(_edgeFrom, _edgeTo, out Vector3 a, out Vector3 ah, out Vector3 bh, out Vector3 b);
                 const float DerivEps = 0.001f;
                 Vector3 dir       = Dio.Level.GeodesicUtil.SphericalBezier(a, ah, bh, b, _edgeT);
                 Vector3 dirAhead  = Dio.Level.GeodesicUtil.SphericalBezier(a, ah, bh, b, Mathf.Min(1f, _edgeT + DerivEps));
-                Vector3 newPos    = planetCenter + dir * planetRadius;
+                var raycaster     = Dio.Level.RaceBootstrap.CurrentRaycaster;
+                float surfaceR    = raycaster != null ? raycaster.ResolveSurfaceRadius(dir) : planetRadius;
+                Vector3 newPos    = planetCenter + dir * surfaceR;
                 Vector3 surfaceUp = (newPos - planetCenter).normalized;
                 Vector3 newTan    = Vector3.ProjectOnPlane((dirAhead - dir), surfaceUp).normalized;
                 if (newTan.sqrMagnitude < 1e-6f) newTan = transform.forward;
@@ -167,13 +171,17 @@ namespace Dio.Level.Obstacles
 
             // Fallback: no level resolvable. Glide along the local tangent
             // plane so the tornado is at least kinetic instead of pinned.
+            // Hug the actual surface via the raycaster — falling back to
+            // `planetRadius` only when no raycaster is available.
             Vector3 dirf = (transform.position - planetCenter).normalized;
             if (dirf.sqrMagnitude < 1e-4f) dirf = Vector3.up;
             Vector3 fwd = Vector3.ProjectOnPlane(transform.forward, dirf).normalized;
             if (fwd.sqrMagnitude < 1e-4f) fwd = Vector3.Cross(dirf, Vector3.right).normalized;
             transform.position += fwd * forwardSpeed * Time.deltaTime;
             dirf = (transform.position - planetCenter).normalized;
-            transform.position = planetCenter + dirf * planetRadius;
+            var rc = Dio.Level.RaceBootstrap.CurrentRaycaster;
+            float rfall = rc != null ? rc.ResolveSurfaceRadius(dirf) : planetRadius;
+            transform.position = planetCenter + dirf * rfall;
             Vector3 fwdT2 = Vector3.ProjectOnPlane(transform.forward, dirf).normalized;
             if (fwdT2.sqrMagnitude < 1e-4f) fwdT2 = fwd;
             transform.rotation = Quaternion.LookRotation(fwdT2, dirf);
@@ -220,9 +228,19 @@ namespace Dio.Level.Obstacles
         void SnapToSurface()
         {
             Vector3 planetCenter = planet != null ? planet.position : Vector3.zero;
-            Vector3 dir = (transform.position - planetCenter).normalized;
-            if (dir.sqrMagnitude < 1e-4f) dir = Vector3.up;
-            transform.position = planetCenter + dir * planetRadius;
+            Vector3 toSpawn = transform.position - planetCenter;
+            float spawnRadius = toSpawn.magnitude;
+            Vector3 dir = spawnRadius > 1e-4f ? toSpawn / spawnRadius : Vector3.up;
+            // Use the SPAWN POSITION's actual radius — same approach Banana
+            // uses for its settle. The previous version forced `planetRadius`
+            // which is the level's nominal radius (circumference / 2π), but
+            // the world.fbx surface varies by direction (mountains / valleys),
+            // so the constant-radius snap was placing the funnel "in the
+            // sky" over low terrain. Preserving the spawn radius matches
+            // wherever the caster was standing, which is on the actual
+            // surface by definition.
+            if (spawnRadius < 1f) spawnRadius = planetRadius;
+            transform.position = planetCenter + dir * spawnRadius;
             Vector3 fwd = Vector3.ProjectOnPlane(transform.forward, dir).normalized;
             if (fwd.sqrMagnitude < 1e-4f) fwd = Vector3.Cross(dir, Vector3.right).normalized;
             transform.rotation = Quaternion.LookRotation(fwd, dir);

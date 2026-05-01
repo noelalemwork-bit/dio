@@ -1,6 +1,8 @@
 using System.Collections.Generic;
 using Mirror;
 using UnityEngine;
+using UnityEngine.EventSystems;
+using UnityEngine.InputSystem;
 using UnityEngine.UI;
 using TMPro;
 using Dio.Common;
@@ -133,11 +135,18 @@ namespace Dio.UI
 
         void Update()
         {
-            // Esc: ALWAYS quits whatever the player is currently in. As a host
-            // it stops the server (kicking every client → their MainMenuController
-            // sees OnClientDisconnect → goes home too). As a client it stops the
-            // local connection. Idle Esc is a no-op.
-            if (Input.GetKeyDown(KeyCode.Escape))
+            // Esc / gamepad Select-or-Back: ALWAYS quits whatever the player
+            // is currently in. As a host it stops the server (kicking every
+            // client → their MainMenuController sees OnClientDisconnect →
+            // goes home too). As a client it stops the local connection.
+            // Idle Esc is a no-op (we'd "go home" to where we already are).
+            bool quitPressed = Input.GetKeyDown(KeyCode.Escape);
+            if (!quitPressed)
+            {
+                var pad = Gamepad.current;
+                if (pad != null && pad.selectButton.wasPressedThisFrame) quitPressed = true;
+            }
+            if (quitPressed)
             {
                 if (net != null && (Mirror.NetworkServer.active || Mirror.NetworkClient.isConnected))
                 {
@@ -145,6 +154,53 @@ namespace Dio.UI
                 }
                 ReturnToHomeScreen();
             }
+
+            // Gamepad nudge: if there's no current selection AND the user
+            // just pressed something on the pad (stick or face buttons),
+            // grab the panel's default selectable so D-pad navigation has
+            // a starting point. Mouse users keep null selection so they
+            // never see a stray highlight ring.
+            if (EventSystem.current != null
+                && EventSystem.current.currentSelectedGameObject == null
+                && JustPressedAnyGamepadNav())
+            {
+                var first = ChooseFirstSelected();
+                if (first != null) EventSystem.current.SetSelectedGameObject(first);
+            }
+        }
+
+        static bool JustPressedAnyGamepadNav()
+        {
+            var pad = Gamepad.current;
+            if (pad == null) return false;
+            if (pad.dpad.up.wasPressedThisFrame || pad.dpad.down.wasPressedThisFrame
+                || pad.dpad.left.wasPressedThisFrame || pad.dpad.right.wasPressedThisFrame) return true;
+            if (pad.buttonSouth.wasPressedThisFrame || pad.buttonEast.wasPressedThisFrame
+                || pad.buttonWest.wasPressedThisFrame || pad.buttonNorth.wasPressedThisFrame) return true;
+            // Stick flick — magnitude crossing 0.5 from rest counts as "intent
+            // to navigate" without spamming on a held stick.
+            float prev = _prevStickMag; float curr = pad.leftStick.ReadValue().magnitude;
+            _prevStickMag = curr;
+            return prev < 0.5f && curr >= 0.5f;
+        }
+        static float _prevStickMag;
+
+        GameObject ChooseFirstSelected()
+        {
+            if (winPanel != null && winPanel.activeInHierarchy) return null; // win is non-interactive
+            if (lobbyPanel != null && lobbyPanel.activeInHierarchy)
+                return startButton != null && startButton.interactable ? startButton.gameObject
+                     : leaveButton != null ? leaveButton.gameObject : null;
+            if (browserPanel != null && browserPanel.activeInHierarchy)
+            {
+                if (_spawnedBrowserRows.Count > 0) return _spawnedBrowserRows[0];
+                if (directIpField != null) return directIpField.gameObject;
+                if (browserCloseButton != null) return browserCloseButton.gameObject;
+            }
+            if (idlePanel != null && idlePanel.activeInHierarchy)
+                return hostButton != null && hostButton.interactable ? hostButton.gameObject
+                     : joinButton != null && joinButton.interactable ? joinButton.gameObject : null;
+            return null;
         }
 
         void OnDisconnectedFromHost()

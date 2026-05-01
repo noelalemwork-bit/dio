@@ -18,23 +18,30 @@ namespace Dio.Level.Obstacles
         public override void OnStartServer()
         {
             base.OnStartServer();
-            // Snap to the planet surface + orient so the disc is tangent
-            // to the surface (its Y axis = surface up).
+            // Snap to the planet surface at the SAME altitude where we were
+            // dropped — exactly the approach Banana uses for its settle-down,
+            // and known to land where the player was. The previous version
+            // queried the runtime raycaster, but on uneven terrain the
+            // raycaster occasionally returns a wildly off radius (e.g. when
+            // the cast direction grazes a vertical face) which would teleport
+            // the slick to a random spot on the planet. Preserving the
+            // spawn-time radius is robust across every level + every
+            // surface profile.
             var planet = Dio.Level.RaceBootstrap.CurrentPlanet;
             Vector3 planetCenter = planet != null ? planet.transform.position : Vector3.zero;
-            Vector3 dir = (transform.position - planetCenter).normalized;
-            if (dir.sqrMagnitude < 1e-4f) dir = Vector3.up;
-            var lvl = Dio.Level.RaceBootstrap.CurrentLevel;
-            // Use the actual surface raycaster (preserves uneven terrain
-            // height); fall back to NominalRadius and finally to the
-            // hazard's own radial position. The hazard's pre-spawn position
-            // matters less than landing on the actual mesh so it doesn't
-            // hover or sink on bumpy planets.
-            var raycaster = Dio.Level.RaceBootstrap.CurrentRaycaster;
-            float r = raycaster != null
-                ? raycaster.ResolveSurfaceRadius(dir)
-                : (lvl != null ? lvl.NominalRadius : (transform.position - planetCenter).magnitude);
-            transform.position = planetCenter + dir * (r + 0.05f);
+            Vector3 toSpawn = transform.position - planetCenter;
+            float spawnRadius = toSpawn.magnitude;
+            Vector3 dir = spawnRadius > 1e-4f ? toSpawn / spawnRadius : Vector3.up;
+            if (spawnRadius < 1f)
+            {
+                // Defensive — should never happen for a player-dropped slick,
+                // but if it does, fall back to NominalRadius so we land
+                // approximately on the surface instead of at the planet
+                // center.
+                var lvl = Dio.Level.RaceBootstrap.CurrentLevel;
+                spawnRadius = lvl != null ? lvl.NominalRadius : 200f;
+            }
+            transform.position = planetCenter + dir * (spawnRadius + 0.05f);
             Vector3 fwd = Vector3.ProjectOnPlane(transform.forward, dir).normalized;
             if (fwd.sqrMagnitude < 1e-4f) fwd = Vector3.Cross(dir, Vector3.right).normalized;
             transform.rotation = Quaternion.LookRotation(fwd, dir);

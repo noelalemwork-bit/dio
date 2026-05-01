@@ -74,6 +74,10 @@ namespace Dio.Net.EditorTools
             // restart-stutter is impossible.
             SetField(nt, "onlySyncOnChange", false);
 
+            // Resolve Mirror.SyncDirection once — used by both branches.
+            var syncDirType = System.Type.GetType("Mirror.SyncDirection, Mirror")
+                           ?? FindTypeInLoadedAssemblies("Mirror.SyncDirection");
+
             if (fastCar)
             {
                 // 0.005 m = 5 mm. Below the eye can resolve at race speed but
@@ -85,19 +89,30 @@ namespace Dio.Net.EditorTools
                 // pushes its position to the server, server relays to peers.
                 // Zero input lag, zero round-trip. Mirror docs:
                 // https://mirror-networking.gitbook.io/docs/manual/general/syncdirection
-                var sdType = System.Type.GetType("Mirror.SyncDirection, Mirror")
-                          ?? FindTypeInLoadedAssemblies("Mirror.SyncDirection");
-                if (sdType != null)
+                if (syncDirType != null)
                 {
-                    var c2s = System.Enum.Parse(sdType, "ClientToServer");
+                    var c2s = System.Enum.Parse(syncDirType, "ClientToServer");
                     SetField(nt, "syncDirection", c2s);
                 }
             }
             else
             {
-                // 1 cm — fine for projectiles + obstacles. These stay
-                // server-authoritative (default ServerToClient).
+                // 1 cm — fine for projectiles + obstacles.
                 SetField(nt, "positionPrecision", 0.01f);
+
+                // Server authority for everything else. CRITICAL to set
+                // explicitly: prefab GUIDs are preserved across rebuilds, so
+                // serialized values (like a stale ClientToServer left over
+                // from an earlier configurator pass) persist unless we reset
+                // them. Without this, NetworkTransformReliable on a non-owned
+                // obstacle would refuse to broadcast updates from the server,
+                // freezing tornado walkers + banana throw arcs at their
+                // initial spawn position on every client.
+                if (syncDirType != null)
+                {
+                    var s2c = System.Enum.Parse(syncDirType, "ServerToClient");
+                    SetField(nt, "syncDirection", s2c);
+                }
             }
 
             return nt;

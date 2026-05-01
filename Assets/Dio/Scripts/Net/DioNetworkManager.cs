@@ -756,14 +756,22 @@ namespace Dio.Net
         {
             base.Update();
 
-            // Host-only restart hotkey (R). Tears down per-race networked
-            // state and reuses the SAME level for an immediate rematch — no
-            // win popup, no lobby roundtrip. Pure clients and dedicated
-            // servers ignore (they have no input or shouldn't decide).
-            if (NetworkServer.active && NetworkClient.active && Input.GetKeyDown(KeyCode.R))
+            // Host-only restart hotkey: R on keyboard, Start (Plus on PS) on
+            // gamepad. Tears down per-race networked state and reuses the
+            // SAME level for an immediate rematch — no win popup, no lobby
+            // roundtrip. Pure clients and dedicated servers ignore (they
+            // have no input or shouldn't decide).
+            if (NetworkServer.active && NetworkClient.active)
             {
-                ServerRestartRace();
-                return;
+                bool restartPressed = Input.GetKeyDown(KeyCode.P);
+                var pad = UnityEngine.InputSystem.Gamepad.current;
+                if (!restartPressed && pad != null && pad.startButton.wasPressedThisFrame)
+                    restartPressed = true;
+                if (restartPressed)
+                {
+                    ServerRestartRace();
+                    return;
+                }
             }
 
             if (!NetworkServer.active || !_raceActive) return;
