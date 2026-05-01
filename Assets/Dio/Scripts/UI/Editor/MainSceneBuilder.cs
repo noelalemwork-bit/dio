@@ -663,10 +663,19 @@ namespace Dio.UI.EditorTools
             // The menu root's Image isn't drawn — kill its raycastTarget so it doesn't eat clicks.
             var menuRootImg = menuRoot.GetComponent<Image>(); if (menuRootImg != null) menuRootImg.raycastTarget = false;
 
-            // Background.
-            var bg = AddImage(menuRoot.transform, "BG", new Color(1.00f, 0.94f, 0.78f), stretch:true);
+            // Background — vertical gradient (cantaloupe → coral → dusk-purple)
+            // for a tasteful Mario-Kart × Trackmania backdrop. Procedural via
+            // GradientBackground.BuildSprite so we don't ship texture assets.
+            var bg = AddImage(menuRoot.transform, "BG", Color.white, stretch:true);
             bg.transform.SetSiblingIndex(0);
             bg.raycastTarget = false;
+            bg.sprite = Dio.UI.GradientBackground.BuildSprite(new[]
+            {
+                new Dio.UI.GradientBackground.Stop { t = 0f,    color = new Color(0.99f, 0.86f, 0.45f, 1f) },
+                new Dio.UI.GradientBackground.Stop { t = 0.55f, color = new Color(0.99f, 0.62f, 0.50f, 1f) },
+                new Dio.UI.GradientBackground.Stop { t = 1f,    color = new Color(0.46f, 0.35f, 0.78f, 1f) },
+            }, 256, horizontal: false);
+            bg.type = Image.Type.Simple;
 
             // Decorative corner accents. If the com.unity.vectorgraphics package is
             // installed and the SVG files in Assets/Dio/UI/Svg/ have been imported
@@ -675,8 +684,15 @@ namespace Dio.UI.EditorTools
             AddCornerAccent(menuRoot.transform, new Color(0.95f, 0.61f, 0.16f, 1f), Vector2.up + Vector2.left,    "TopLeft",     "flag");
             AddCornerAccent(menuRoot.transform, new Color(0.36f, 0.72f, 0.37f, 1f), Vector2.right + Vector2.down, "BottomRight", "planet");
 
-            // ---- Top bar ----
-            var topBar = AddPanel(menuRoot.transform, "TopBar", new Color(1f, 1f, 1f, 0.85f));
+            // ---- Top bar — soft cream-to-peach gradient strip ----
+            var topBar = AddPanel(menuRoot.transform, "TopBar", Color.white);
+            var topBarImg = topBar.GetComponent<Image>();
+            topBarImg.sprite = Dio.UI.GradientBackground.BuildSprite(new[]
+            {
+                new Dio.UI.GradientBackground.Stop { t = 0f, color = new Color(1.00f, 0.98f, 0.92f, 0.95f) },
+                new Dio.UI.GradientBackground.Stop { t = 1f, color = new Color(1.00f, 0.91f, 0.78f, 0.92f) },
+            }, 64, horizontal: false);
+            topBarImg.type = Image.Type.Simple;
             var topRT = (RectTransform)topBar.transform;
             topRT.anchorMin = new Vector2(0, 1); topRT.anchorMax = new Vector2(1, 1);
             topRT.pivot = new Vector2(0.5f, 1);
@@ -733,11 +749,43 @@ namespace Dio.UI.EditorTools
             var hostBtn = AddBigButton(idle.transform, "HostButton", "Host Game", new Color(0.95f, 0.61f, 0.16f, 1f), "menu_host");
             var joinBtn = AddBigButton(idle.transform, "JoinButton", "Join Game", new Color(0.36f, 0.72f, 0.37f, 1f), "menu_join");
 
-            // ---- Browser panel ----
-            var browser = AddPanel(menuRoot.transform, "BrowserPanel", new Color(1, 1, 1, 0.95f));
+            // ---- KING RACER arc title — sits in an arc above the Host/Join
+            // buttons. Each glyph bobs + scales independently for that
+            // "cartoon kart-game" feel; per-letter outline gives the chunky
+            // bubble silhouette without authoring a custom font.
+            var titleGo = new GameObject("ArcTitle", typeof(RectTransform));
+            titleGo.transform.SetParent(menuRoot.transform, false);
+            var titleRt = (RectTransform)titleGo.transform;
+            titleRt.anchorMin = new Vector2(0.5f, 0.5f); titleRt.anchorMax = new Vector2(0.5f, 0.5f);
+            titleRt.sizeDelta = new Vector2(900, 240);
+            // Anchor centred above the idle panel: idle is 220 px tall and
+            // sits at 0,0; offset the title up by ~210 px so its arc baseline
+            // hovers above the buttons.
+            titleRt.anchoredPosition = new Vector2(0, 210);
+            var arcTitle = titleGo.AddComponent<Dio.UI.AnimatedArcTitle>();
+            arcTitle.text = "KING RACER";
+            arcTitle.fontSize = 110f;
+            arcTitle.arcWidth = 760f;
+            arcTitle.arcHeight = 70f;
+            arcTitle.glyphColor = new Color(1.00f, 0.93f, 0.30f, 1f);
+            arcTitle.outlineColor = new Color(0.25f, 0.10f, 0.05f, 1f);
+            arcTitle.outlineWidth = 0.32f;
+            arcTitle.bounceAmp = 16f;
+            arcTitle.scaleAmp = 0.14f;
+            arcTitle.phasePerGlyph = 0.55f;
+
+            // ---- Browser panel — soft cream→peach gradient card ----
+            var browser = AddPanel(menuRoot.transform, "BrowserPanel", Color.white);
             var brt = (RectTransform)browser.transform;
             brt.anchorMin = new Vector2(0.5f, 0.5f); brt.anchorMax = new Vector2(0.5f, 0.5f);
             brt.sizeDelta = new Vector2(680, 520);
+            var browserImg = browser.GetComponent<Image>();
+            browserImg.sprite = Dio.UI.GradientBackground.BuildSprite(new[]
+            {
+                new Dio.UI.GradientBackground.Stop { t = 0f, color = new Color(1.00f, 0.98f, 0.90f, 0.97f) },
+                new Dio.UI.GradientBackground.Stop { t = 1f, color = new Color(1.00f, 0.85f, 0.70f, 0.97f) },
+            }, 256, horizontal: false);
+            browserImg.type = Image.Type.Simple;
             browser.SetActive(false);
 
             var bvg = browser.AddComponent<VerticalLayoutGroup>();
@@ -794,10 +842,19 @@ namespace Dio.UI.EditorTools
             // ---- Lobby panel ----
             // Stretches to fit the screen with margins instead of a fixed
             // 680×600 — older fixed sizes overlapped on small windows.
-            var lobby = AddPanel(menuRoot.transform, "LobbyPanel", new Color(1, 1, 1, 0.95f));
+            var lobby = AddPanel(menuRoot.transform, "LobbyPanel", Color.white);
             var lrt = (RectTransform)lobby.transform;
             lrt.anchorMin = new Vector2(0.5f, 0.5f); lrt.anchorMax = new Vector2(0.5f, 0.5f);
             lrt.sizeDelta = new Vector2(1100, 720);
+            // Soft cream-to-mint gradient card so the lobby reads as its own
+            // surface against the menu backdrop, instead of a flat tinted rect.
+            var lobbyImg = lobby.GetComponent<Image>();
+            lobbyImg.sprite = Dio.UI.GradientBackground.BuildSprite(new[]
+            {
+                new Dio.UI.GradientBackground.Stop { t = 0f, color = new Color(1.00f, 0.98f, 0.90f, 0.97f) },
+                new Dio.UI.GradientBackground.Stop { t = 1f, color = new Color(0.85f, 0.95f, 0.88f, 0.97f) },
+            }, 256, horizontal: false);
+            lobbyImg.type = Image.Type.Simple;
             lobby.SetActive(false);
 
             // childControlHeight=true so the layout RESPECTS each child's
@@ -1278,6 +1335,21 @@ namespace Dio.UI.EditorTools
             winBgRt.anchorMin = new Vector2(0.5f, 0.5f); winBgRt.anchorMax = new Vector2(0.5f, 0.5f);
             winBgRt.sizeDelta = new Vector2(720, 280);
             SvgIconLoader.AttachIcon(winBgGo, LoadSvg("winner_banner"), Color.white);
+
+            // Trophy SVG — sits to the LEFT of the banner, large and vector-
+            // crisp. Reads as "you raised the cup", carrying the World Cup
+            // theme without needing licensed marks.
+            var trophyGo = new GameObject("Trophy", typeof(RectTransform));
+            trophyGo.transform.SetParent(winPanel.transform, false);
+            var trophyRt = (RectTransform)trophyGo.transform;
+            trophyRt.anchorMin = new Vector2(0.5f, 0.5f); trophyRt.anchorMax = new Vector2(0.5f, 0.5f);
+            trophyRt.sizeDelta = new Vector2(280, 320);
+            trophyRt.anchoredPosition = new Vector2(-440, 20);
+            SvgIconLoader.AttachIcon(trophyGo, LoadSvg("trophy"), Color.white);
+            // Slow idle bob + scale via SpringScale isn't quite right — use
+            // AnimatedArcTitle's bounce code? It's a single glyph, simpler to
+            // just attach a SpinningProp-style local rotator. Keeping the
+            // trophy static for now reads fine; the confetti supplies motion.
 
             // Player color chip (top-center of banner).
             var chipGo = new GameObject("ColorChip", typeof(RectTransform), typeof(Image));

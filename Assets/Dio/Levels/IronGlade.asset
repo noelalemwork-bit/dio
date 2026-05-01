@@ -1,0 +1,60 @@
+%YAML 1.1
+%TAG !u! tag:unity3d.com,2011:
+--- !u!114 &11400000
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 0}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: 1bc9a7716bc36b04f93b3d69603db1de, type: 3}
+  m_Name: IronGlade
+  m_EditorClassIdentifier: Assembly-CSharp::Dio.Level.LevelData
+  circumference: 1256.6371
+  trackRatio: 1
+  trackWidth: 15
+  points:
+  - directionFromCenter: {x: -0.92312074, y: 0.2511551, z: -0.29115155}
+    bank: 0
+    inHandle: {x: 0, y: 0, z: 0}
+    outHandle: {x: -0.98082656, y: 0.19469358, z: -0.008579522}
+    yOffset: 0.86612654
+    guardRailFloating: 0
+    next: 01000000
+  - directionFromCenter: {x: -0.99702543, y: -0.060889322, z: -0.047252633}
+    bank: 0
+    inHandle: {x: -0.9982009, y: 0.059796862, z: 0.0044060983}
+    outHandle: {x: -0.9476795, y: -0.28566924, z: -0.14246622}
+    yOffset: 20.378204
+    guardRailFloating: 1
+    next: 02000000
+  - directionFromCenter: {x: -0.936857, y: -0.004871246, z: -0.34967878}
+    bank: 0
+    inHandle: {x: -0.9380936, y: -0.18574467, z: -0.29236838}
+    outHandle: {x: -0.91013134, y: 0.14584684, z: -0.38780102}
+    yOffset: 11.436361
+    guardRailFloating: 1
+    next: 03000000
+  - directionFromCenter: {x: -0.97767067, y: 0.11720761, z: -0.17442058}
+    bank: 0
+    inHandle: {x: -0.9557558, y: 0.1397745, z: -0.25883198}
+    outHandle: {x: -0.99355555, y: 0.08868432, z: -0.07058674}
+    yOffset: 12.931548
+    guardRailFloating: 1
+    next: 04000000
+  - directionFromCenter: {x: -0.9866346, y: -0.04785791, z: -0.15576227}
+    bank: 0
+    inHandle: {x: -0.9940634, y: -0.0316116, z: -0.10410941}
+    outHandle: {x: -0.9791836, y: -0.0598699, z: -0.1939457}
+    yOffset: 27.095795
+    guardRailFloating: 1
+    next: 05000000
+  - directionFromCenter: {x: -0.9671189, y: 0.022603525, z: -0.25331804}
+    bank: 0
+    inHandle: {x: -0.971802, y: -0.099693164, z: -0.21368709}
+    outHandle: {x: 0, y: 0, z: 0}
+    yOffset: 31.550886
+    guardRailFloating: 1
+    next: 

@@ -99,16 +99,23 @@ namespace Dio.UI
             yield return TickPop("1");
             yield return WaitUntilNetworkTime(goTime);
 
-            // GO! — restore camera lerp + unlock cars + hold the text.
-            // The authoritative OnCountdownEnd is fired by RaceGoMessage
-            // arriving from the server (DioNetworkManager.OnClientRaceGo);
-            // we DON'T fire it here, because each peer reaching this line
-            // at its own NetworkTime convergence point would desync host
-            // and guests. Inputs are unlocked locally for snappy visuals;
-            // physics-side state changes (DioCar's OnCountdownEnd, win
-            // tracking) wait for the server's message.
+            // GO! — restore camera lerp + unlock cars + fire the rev-launch
+            // hook + hold the text.
+            //
+            // FAIRNESS: every peer reaches this line at NetworkTime == goTime,
+            // i.e. the SAME wall-clock instant (within Mirror's ~5 ms LAN
+            // clock-sync error). Earlier versions deferred the launch to
+            // RaceGoMessage arrival, which arrives with zero latency on the
+            // host and ~RTT/2 on remote clients — letting the host launch
+            // first by ~10–30 ms on every race. Firing OnCountdownEnd here,
+            // off the shared NetworkTime gate, gives every player the same
+            // launch instant. The message-arrival path in
+            // DioNetworkManager.OnClientRaceGo still fires too, but
+            // DioCar.OnCountdownEnd is idempotent (clears _inCountdown
+            // after applying the rev launch), so the second call is a no-op.
             if (rc != null) rc.chasePosLerp = runChaseLerp;
             SetAllCarInputsLocked(false);
+            DioNetworkManager.OnCountdownEnd?.Invoke();
             yield return TickPop("GO!", durationSeconds: goHoldSeconds, isGo: true);
 
             HideCountdown();

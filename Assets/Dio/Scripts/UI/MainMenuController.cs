@@ -155,17 +155,23 @@ namespace Dio.UI
                 ReturnToHomeScreen();
             }
 
-            // Gamepad nudge: if there's no current selection AND the user
-            // just pressed something on the pad (stick or face buttons),
+            // Gamepad nudge: if there's no usable current selection AND the
+            // user just pressed something on the pad (stick or face buttons),
             // grab the panel's default selectable so D-pad navigation has
-            // a starting point. Mouse users keep null selection so they
-            // never see a stray highlight ring.
-            if (EventSystem.current != null
-                && EventSystem.current.currentSelectedGameObject == null
-                && JustPressedAnyGamepadNav())
+            // a starting point. Treat an inactive selection (e.g. a button
+            // on a panel that just hid itself) as "no selection" so the
+            // user never gets stuck with focus on a hidden Selectable.
+            // Mouse users keep null selection — they never trigger this
+            // branch — so there's no stray highlight ring for mouse-only
+            // sessions.
+            var es = EventSystem.current;
+            bool needsNudge = es != null && JustPressedAnyGamepadNav() && (
+                es.currentSelectedGameObject == null
+                || !es.currentSelectedGameObject.activeInHierarchy);
+            if (needsNudge)
             {
                 var first = ChooseFirstSelected();
-                if (first != null) EventSystem.current.SetSelectedGameObject(first);
+                if (first != null) es.SetSelectedGameObject(first);
             }
         }
 
@@ -675,7 +681,7 @@ namespace Dio.UI
             if (winPanel != null)
             {
                 winPanel.SetActive(true);
-                if (winLabel != null) winLabel.text = $"{msg.winnerName}\nWINS!";
+                if (winLabel != null) winLabel.text = $"{msg.winnerName}\n<size=80%>WINS THE CUP!</size>";
                 if (winColorChip != null) winColorChip.color = ColorPalette.Get(msg.winnerColorIndex);
                 if (winConfetti != null) winConfetti.Burst();
             }

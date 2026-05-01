@@ -163,6 +163,13 @@ namespace Dio.Level
             /// When true, emit a perpendicular wall at the finish anchor —
             /// the canonical "finish line" wall.
             public bool addFinishEndcap;
+            /// When true, edges whose `from` anchor has `guardRailFloating`
+            /// set are SKIPPED entirely (no geometry emitted). Used by the
+            /// editor preview so floating sections don't waste verts on a
+            /// rail nobody will see while authoring; runtime leaves this
+            /// FALSE so the floating rail still renders + collides — just
+            /// with a symmetric skirt that doesn't drag down to the ground.
+            public bool skipFloating;
 
             public static GuardOptions Default => new GuardOptions
             {
@@ -176,6 +183,7 @@ namespace Dio.Level
                 addEndcaps      = false,
                 addStartEndcap  = false,
                 addFinishEndcap = false,
+                skipFloating    = false,
             };
         }
 
@@ -466,6 +474,12 @@ namespace Dio.Level
             GuardOptions edgeOpt = opt;
             if (level.points[from].guardRailFloating)
             {
+                // Editor preview asks us to skip these entirely (saves verts +
+                // declutters the authoring view).
+                if (opt.skipFloating) return;
+                // Runtime path: still emit the rail, but bound the skirt to
+                // mirror the wall height so it doesn't drag down to the
+                // surface for an elevated / looping section.
                 edgeOpt.floorAtSurface = false;
                 edgeOpt.skirtDepth     = 0.05f + Mathf.Max(0f, opt.wallHeight);
             }

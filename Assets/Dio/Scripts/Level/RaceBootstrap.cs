@@ -245,7 +245,7 @@ namespace Dio.Level
             // a hard collision still throw the car off; matches the main
             // track's lowered profile.
             var guardOpt = TrackBuilder.GuardOptions.Default;
-            guardOpt.wallHeight = 0.35f;
+            guardOpt.wallHeight = 1.75f;
             guardOpt.lipOutward = 0.05f;
             guardOpt.outwardOffset = 0.05f;
             guardOpt.floorAtSurface = true;
@@ -312,7 +312,7 @@ namespace Dio.Level
         {
             if (_guards != null) Destroy(_guards);
 
-            // Low rim rail (~ 35cm tall, 5cm lip). Tall enough to scrape
+            // Low rim rail (~ 55cm tall, 5cm lip). Tall enough to scrape
             // the wheels and discourage cutting the track edge, low enough
             // to keep the surrounding planet/scenery visible AND let a hard
             // bounce throw the car clean over the edge — that's the design
@@ -321,9 +321,13 @@ namespace Dio.Level
             // to the last checkpoint after a couple seconds of no track
             // contact. 1m skirt covers the seam to the low-poly planet
             // collider so the rail doesn't float visually on uneven ground.
+            //
+            // NOTE: this value OVERRIDES `GuardOptions.Default.wallHeight`.
+            // Bumping the default has no effect at runtime — change this
+            // line. Same pattern in EnsureSpawnPad above.
             var opt = TrackBuilder.GuardOptions.Default;
-            opt.wallHeight = 0.35f;
-            opt.lipOutward = 0.05f;
+            opt.wallHeight = 0.6f;
+            opt.lipOutward = 0.06f;
             opt.outwardOffset = 0.05f;
             opt.floorAtSurface = true;          // skirt always reaches the actual ground
             opt.floorPad = 1f;

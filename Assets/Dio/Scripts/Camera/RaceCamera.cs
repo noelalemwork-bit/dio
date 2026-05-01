@@ -16,7 +16,9 @@ namespace Dio.CameraRig
     {
         public Transform target;
         public SphericalGravity gravity; // pulled from target if null
-        public RaceCameraMode mode = RaceCameraMode.Chase;
+        // Default to the pulled-back Panoramic ("far") mode — best read of
+        // the track + planet curvature. Tab cycles through Chase + Hood.
+        public RaceCameraMode mode = RaceCameraMode.Panoramic;
 
         // Backed property so we re-subscribe on assignment. Awake runs the moment
         // a component is added, which is BEFORE the assigner has a chance to set
@@ -54,7 +56,11 @@ namespace Dio.CameraRig
         public float panoramicFovAtMaxSpeed = 100f;
 
         [Header("Hood offset (target local space)")]
-        public Vector3 hoodOffset = new Vector3(0f, 1.05f, 0.4f);
+        // Sits above the windshield + ahead of the front bumper so the car
+        // body (chassis ≈ 0.7 m tall, 3.2 m long, pivot at the floor between
+        // the wheels) never clips the near plane. Previous values
+        // (0, 1.05, 0.4) sat right inside the cabin mesh on Kenney profiles.
+        public Vector3 hoodOffset = new Vector3(0f, 1.45f, 1.3f);
 
         [Header("Cinematic intro")]
         // Multipliers applied to chaseDistance / chaseHeight at the START of

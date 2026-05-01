@@ -381,10 +381,14 @@ namespace Dio.Net
                 levelDisplayName = ownerKeyName,
                 level = _activeLevel,
                 seed = Random.Range(int.MinValue, int.MaxValue),
-                // Long delay so the cinematic intro gets time to swoop the
-                // camera in + run the 3-2-1-GO! countdown. RaceIntro on each
-                // peer locks inputs locally until startServerTime.
-                startServerTime = NetworkTime.time + 4.0,
+                // startServerTime is filled in JUST BEFORE SendToAll below.
+                // Computing it here would lock the GO! instant in before
+                // car/powerup spawning runs — and that spawn loop can take
+                // tens of milliseconds with 25+ powerup boxes to network-
+                // spawn. Setting it after spawning makes "4 seconds from
+                // message-on-the-wire" exact for every peer, including the
+                // host's local client.
+                startServerTime = 0,
                 // Roll a fresh skybox per race. Every peer reads this on
                 // receipt and swaps RenderSettings.skybox to the matching
                 // library entry, so the host and all clients see the same sky.
@@ -413,7 +417,16 @@ namespace Dio.Net
             _totalTrackLength = Dio.Level.TrackBuilder.TotalArcLength(_activeLevel);
             _raceActive = true;
 
-            // Tell every client (host's local client included).
+            // Stamp the GO! instant on Mirror's shared NetworkTime timeline
+            // RIGHT before broadcasting — every peer (host + remote clients)
+            // reads the SAME value off the wire and ticks toward it via
+            // NetworkTime.time, so "3 / 2 / 1 / GO!" appears at the same
+            // wall-clock instant on every screen (give or take the per-peer
+            // NetworkTime convergence error, which Mirror keeps below ~5 ms
+            // on a LAN). Computing it AFTER spawning means the 4-second
+            // countdown is exact relative to message-on-the-wire time, not
+            // relative to "before we spent N ms spawning cars + powerups".
+            msg.startServerTime = NetworkTime.time + 4.0;
             NetworkServer.SendToAll(msg);
 
             // Headless dedicated server: the message handler won't fire on the

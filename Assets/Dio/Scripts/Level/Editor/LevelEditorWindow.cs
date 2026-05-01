@@ -282,6 +282,10 @@ namespace Dio.Level.EditorTools
                 guardOpt.floorPad       = TrackBuilder.DefaultFloorPad;
                 guardOpt.outwardOffset  = 0.05f;
                 guardOpt.addEndcaps     = false;
+                // Skip floating-rail segments entirely in the editor preview —
+                // the runtime build still draws them with a symmetric skirt,
+                // but at authoring time they just clutter the view.
+                guardOpt.skipFloating   = true;
                 (_previewGuardLeft, _previewGuardRight) = TrackBuilder.BuildGuards(
                     level, _raycaster, guardOpt,
                     segmentsPerArc: wantSegments,

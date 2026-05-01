@@ -202,11 +202,15 @@ namespace Dio.Player
                 return moveAction.action.ReadValue<Vector2>();
 
             // Gamepad path: left stick steers + supplies analog throttle, with
-            // right trigger acting as a "throttle override" so players who
-            // prefer trigger-throttle (Forza-style) get full forward without
-            // pushing the stick forward. Triggers don't reverse — that's the
-            // stick's job (back-stick = reverse). D-pad doubles for digital
-            // input on pads without reliable analog sticks.
+            // right trigger acting as a "forward-only throttle override" so
+            // players who prefer trigger-throttle (Forza-style) get full
+            // forward without pushing the stick forward. The trigger NEVER
+            // overrides reverse — pulling the stick back (or pressing
+            // D-Pad ↓ / S / down-arrow) gives reverse regardless of the
+            // trigger's value. Past versions clobbered reverse by writing
+            // `if (rt > stick.y) stick.y = rt;` which fired whenever the
+            // trigger was at rest (0) and the stick was pulled back (-1),
+            // since 0 > -1, replacing reverse with idle.
             Vector2 stick = Vector2.zero;
             var pad = Gamepad.current;
             if (pad != null)
@@ -217,8 +221,6 @@ namespace Dio.Player
                 stick = ls + dp;
                 stick.x = Mathf.Clamp(stick.x, -1f, 1f);
                 stick.y = Mathf.Clamp(stick.y, -1f, 1f);
-                float rt = pad.rightTrigger.ReadValue();
-                if (rt > stick.y) stick.y = rt;
             }
 
             var kb = Keyboard.current;
@@ -228,8 +230,21 @@ namespace Dio.Player
                         + (kb.dKey.isPressed || kb.rightArrowKey.isPressed ?  1f : 0f);
                 float y = (kb.sKey.isPressed || kb.downArrowKey.isPressed ? -1f : 0f)
                         + (kb.wKey.isPressed || kb.upArrowKey.isPressed   ?  1f : 0f);
+                // Magnitude-wins merge so a held key doesn't get cancelled by
+                // a stick at rest (and vice versa), AND so a stick pulled
+                // back to reverse beats a forward keypress only if the stick
+                // is pushed harder than the key.
                 if (Mathf.Abs(x) > Mathf.Abs(stick.x)) stick.x = x;
                 if (Mathf.Abs(y) > Mathf.Abs(stick.y)) stick.y = y;
+            }
+
+            // Apply the right trigger AFTER the stick + keyboard merge, and
+            // only as a FORWARD-additive override: it can raise stick.y
+            // toward +1 but never replaces a negative (reverse) value.
+            if (pad != null)
+            {
+                float rt = pad.rightTrigger.ReadValue();
+                if (rt > 0.05f && stick.y >= 0f && rt > stick.y) stick.y = rt;
             }
             return stick;
         }

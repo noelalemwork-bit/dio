@@ -39,7 +39,22 @@ When you first move the stick or press a face button on the gamepad, Dio auto-se
 
 ## Cheats (debug)
 
-`PowerupCheats` reads number-row digits 0–9 to grant powerups directly. Keyboard only — no gamepad binding (intentional: avoids an accidental DPad chord giving you a Blue Shell during real play).
+`PowerupCheats` is OFF by default — toggle `enableCheats` on the component to grant powerups directly to the local owned car. Bindings:
+
+| Powerup        | Keyboard       | Gamepad                    |
+|----------------|----------------|----------------------------|
+| Boost          | 1              | L2                         |
+| Triple Boost   | 2              | D-Pad ↑                    |
+| Star           | 3              | **R2**                     |
+| Lightning      | 4              | Y / Triangle (North)       |
+| Banana         | 5              | L1                         |
+| Oil Slick      | 6              | D-Pad ↓                    |
+| Penalty Shot   | 7              | R1                         |
+| Blue Shell     | 8              | X / Square (West)          |
+| Bo-bomb        | 9              | D-Pad →                    |
+| Tornado        | 0              | D-Pad ←                    |
+
+Gamepad cheats overlap with normal driving inputs (R2 = throttle, L2 = brake, etc.). That's intentional: cheats are dev-only and overlap is fine in cheat sessions. `wasPressedThisFrame` semantics mean holding the trigger for throttle won't spam-grant — only fresh trigger presses fire.
 
 ## Where this lives in code
 

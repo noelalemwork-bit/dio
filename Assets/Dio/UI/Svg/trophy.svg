@@ -1,0 +1,44 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 240 280" width="240" height="280">
+  <!-- Sunburst halo -->
+  <g transform="translate(120 110)">
+    <g fill="#FFD24A" opacity="0.55">
+      <polygon points="0,-130 18,-40 -18,-40"/>
+      <polygon points="0,-130 18,-40 -18,-40" transform="rotate(60)"/>
+      <polygon points="0,-130 18,-40 -18,-40" transform="rotate(120)"/>
+      <polygon points="0,-130 18,-40 -18,-40" transform="rotate(180)"/>
+      <polygon points="0,-130 18,-40 -18,-40" transform="rotate(240)"/>
+      <polygon points="0,-130 18,-40 -18,-40" transform="rotate(300)"/>
+    </g>
+    <g fill="#F39B2A" opacity="0.5">
+      <polygon points="0,-115 14,-34 -14,-34" transform="rotate(30)"/>
+      <polygon points="0,-115 14,-34 -14,-34" transform="rotate(90)"/>
+      <polygon points="0,-115 14,-34 -14,-34" transform="rotate(150)"/>
+      <polygon points="0,-115 14,-34 -14,-34" transform="rotate(210)"/>
+      <polygon points="0,-115 14,-34 -14,-34" transform="rotate(270)"/>
+      <polygon points="0,-115 14,-34 -14,-34" transform="rotate(330)"/>
+    </g>
+  </g>
+  <!-- Trophy handles -->
+  <path d="M58 90 Q22 90 22 130 Q22 168 64 174"
+        fill="none" stroke="#7E5A14" stroke-width="10" stroke-linecap="round"/>
+  <path d="M182 90 Q218 90 218 130 Q218 168 176 174"
+        fill="none" stroke="#7E5A14" stroke-width="10" stroke-linecap="round"/>
+  <path d="M58 90 Q22 90 22 130 Q22 168 64 174"
+        fill="none" stroke="#F1D24D" stroke-width="6" stroke-linecap="round"/>
+  <path d="M182 90 Q218 90 218 130 Q218 168 176 174"
+        fill="none" stroke="#F1D24D" stroke-width="6" stroke-linecap="round"/>
+  <!-- Cup body -->
+  <path d="M58 70 L182 70 L172 180 Q120 200 68 180 Z"
+        fill="#F1D24D" stroke="#7E5A14" stroke-width="6" stroke-linejoin="round"/>
+  <!-- Cup highlight -->
+  <path d="M68 78 L92 78 L90 160 Q80 156 76 150 Z"
+        fill="#FFFFFF" opacity="0.35"/>
+  <!-- Star on cup face -->
+  <polygon points="120,108 130,138 162,138 136,156 146,188 120,170 94,188 104,156 78,138 110,138"
+           fill="#FFFFFF" stroke="#7E5A14" stroke-width="3" stroke-linejoin="round"/>
+  <!-- Pedestal stem -->
+  <rect x="100" y="180" width="40" height="22" rx="6" fill="#C49521" stroke="#7E5A14" stroke-width="4"/>
+  <!-- Base -->
+  <rect x="60" y="200" width="120" height="40" rx="10" fill="#C49521" stroke="#7E5A14" stroke-width="5"/>
+  <rect x="64" y="206" width="112" height="8" rx="4" fill="#FFFFFF" opacity="0.35"/>
+</svg>

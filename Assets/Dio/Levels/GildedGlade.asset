@@ -1,0 +1,74 @@
+%YAML 1.1
+%TAG !u! tag:unity3d.com,2011:
+--- !u!114 &11400000
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 0}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: 1bc9a7716bc36b04f93b3d69603db1de, type: 3}
+  m_Name: GildedGlade
+  m_EditorClassIdentifier: Assembly-CSharp::Dio.Level.LevelData
+  circumference: 1256.6371
+  trackRatio: 1
+  trackWidth: 15
+  points:
+  - directionFromCenter: {x: -0.89233476, y: 0.374347, z: -0.25219643}
+    bank: 0
+    inHandle: {x: 0, y: 0, z: 0}
+    outHandle: {x: -0.95801383, y: 0.11434338, z: -0.2629356}
+    yOffset: 29.686047
+    guardRailFloating: 1
+    next: 01000000
+  - directionFromCenter: {x: -0.9160359, y: -0.36630037, z: -0.16340813}
+    bank: 0
+    inHandle: {x: -0.83267766, y: -0.43225464, z: -0.34612674}
+    outHandle: {x: -0.95672363, y: -0.29074782, z: 0.012067212}
+    yOffset: 18.666685
+    guardRailFloating: 1
+    next: 02000000
+  - directionFromCenter: {x: -0.907732, y: 0.41155842, z: -0.081500456}
+    bank: 0
+    inHandle: {x: -0.9141637, y: 0.33344778, z: -0.23047198}
+    outHandle: {x: -0.8756571, y: 0.47790366, z: 0.06951892}
+    yOffset: 7.0145106
+    guardRailFloating: 1
+    next: 03000000
+  - directionFromCenter: {x: -0.98437274, y: 0.04162651, z: 0.17110693}
+    bank: 0
+    inHandle: {x: -0.92696065, y: 0.25131956, z: 0.27853638}
+    outHandle: {x: -0.99134076, y: -0.07624063, z: 0.10691551}
+    yOffset: 4.2998075
+    guardRailFloating: 1
+    next: 04000000
+  - directionFromCenter: {x: -0.95159143, y: -0.059421357, z: -0.30156735}
+    bank: 0
+    inHandle: {x: -0.99544156, y: 0.09443812, z: -0.013324648}
+    outHandle: {x: -0.86312586, y: -0.16032039, z: -0.47886452}
+    yOffset: 32.130642
+    guardRailFloating: 0
+    next: 05000000
+  - directionFromCenter: {x: -0.87035453, y: 0.10604533, z: -0.48087144}
+    bank: 0
+    inHandle: {x: -0.79505473, y: 0.000027452392, z: -0.6065376}
+    outHandle: {x: -0.92711556, y: 0.27867347, z: -0.25059485}
+    yOffset: 4.2998075
+    guardRailFloating: 0
+    next: 06000000
+  - directionFromCenter: {x: -0.84551024, y: -0.366029, z: -0.38876104}
+    bank: 0
+    inHandle: {x: -0.91492444, y: 0.1648537, z: 0.3684244}
+    outHandle: {x: -0.5471931, y: -0.5227269, z: -0.65370965}
+    yOffset: 6.0100713
+    guardRailFloating: 0
+    next: 07000000
+  - directionFromCenter: {x: -0.41063902, y: 0.16153224, z: -0.8973756}
+    bank: 0
+    inHandle: {x: -0.76536757, y: -0.0696082, z: -0.6398181}
+    outHandle: {x: 0, y: 0, z: 0}
+    yOffset: 2.9634092
+    guardRailFloating: 0
+    next: 
